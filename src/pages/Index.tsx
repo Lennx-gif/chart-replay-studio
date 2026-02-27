@@ -1,13 +1,38 @@
-// Update this page (the content is just a fallback if you fail to update the page)
+import { useState } from 'react';
+import { FileUpload } from '@/components/FileUpload';
+import { ChartView } from '@/components/ChartView';
+import { parseCSV, type OHLCVBar } from '@/lib/csvParser';
+import { toast } from 'sonner';
 
 const Index = () => {
+  const [bars, setBars] = useState<OHLCVBar[] | null>(null);
+  const [fileName, setFileName] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleFile = async (file: File) => {
+    setIsLoading(true);
+    try {
+      const parsed = await parseCSV(file);
+      setBars(parsed);
+      setFileName(file.name.replace('.csv', ''));
+      toast.success(`Loaded ${parsed.length} bars from ${file.name}`);
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to parse CSV');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (!bars) {
+    return <FileUpload onFileSelected={handleFile} isLoading={isLoading} />;
+  }
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <div className="text-center">
-        <h1 className="mb-4 text-4xl font-bold">Welcome to Your Blank App</h1>
-        <p className="text-xl text-muted-foreground">Start building your amazing project here!</p>
-      </div>
-    </div>
+    <ChartView
+      rawBars={bars}
+      fileName={fileName}
+      onReset={() => { setBars(null); setFileName(''); }}
+    />
   );
 };
 
