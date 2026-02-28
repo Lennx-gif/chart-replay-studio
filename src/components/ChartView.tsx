@@ -3,34 +3,57 @@ import { createChart, type IChartApi, type ISeriesApi, ColorType } from 'lightwe
 import type { OHLCVBar } from '@/lib/csvParser';
 import { resampleBars, applyTimezoneOffset, detectBaseTimeframe } from '@/lib/csvParser';
 import type { Drawing, DrawingType } from '@/lib/drawings';
+import { saveProject, generateProjectId, type SavedProject } from '@/lib/projectStorage';
 import { ChartToolbar } from './ChartToolbar';
 import { ReplayControls } from './ReplayControls';
 import { TimeframeSelector } from './TimeframeSelector';
 import { TimezoneSelector } from './TimezoneSelector';
 import { DrawingOverlay } from './DrawingOverlay';
+import { ProjectManager } from './ProjectManager';
 import { Globe, BarChart3 } from 'lucide-react';
 
 interface ChartViewProps {
   rawBars: OHLCVBar[];
   fileName: string;
+  csvText: string;
+  loadedProject: SavedProject | null;
+  onLoadProject: (project: SavedProject) => void;
   onReset: () => void;
 }
 
-export function ChartView({ rawBars, fileName, onReset }: ChartViewProps) {
+export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadProject, onReset }: ChartViewProps) {
   const containerRef = useRef<HTMLDivElement>(null!);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [projectId, setProjectId] = useState(loadedProject?.id || generateProjectId());
+  const [projectName, setProjectName] = useState(loadedProject?.name || fileName);
 
   const baseTimeframe = detectBaseTimeframe(rawBars);
-  const [timeframe, setTimeframe] = useState(baseTimeframe);
-  const [tzOffset, setTzOffset] = useState(0);
-  const [currentBarIndex, setCurrentBarIndex] = useState(50);
+  const [timeframe, setTimeframe] = useState(loadedProject?.timeframe || baseTimeframe);
+  const [tzOffset, setTzOffset] = useState(loadedProject?.tzOffset || 0);
+  const [currentBarIndex, setCurrentBarIndex] = useState(loadedProject?.currentBarIndex || 50);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [speed, setSpeed] = useState(1);
+  const [speed, setSpeed] = useState(loadedProject?.speed || 1);
   const [activeTool, setActiveTool] = useState<DrawingType | null>(null);
-  const [drawings, setDrawings] = useState<Drawing[]>([]);
+  const [drawings, setDrawings] = useState<Drawing[]>(loadedProject?.drawings || []);
+
+  const handleSaveProject = useCallback((name: string) => {
+    setProjectName(name);
+    saveProject({
+      id: projectId,
+      name,
+      savedAt: Date.now(),
+      fileName,
+      timeframe,
+      tzOffset,
+      currentBarIndex,
+      speed,
+      drawings,
+      csvData: csvText,
+    });
+  }, [projectId, fileName, timeframe, tzOffset, currentBarIndex, speed, drawings, csvText]);
 
   // Compute displayed bars
   const allBars = applyTimezoneOffset(
@@ -51,8 +74,8 @@ export function ChartView({ rawBars, fileName, onReset }: ChartViewProps) {
         fontSize: 11,
       },
       grid: {
-        vertLines: { color: '#1e2530' },
-        horzLines: { color: '#1e2530' },
+        vertLines: { visible: false },
+        horzLines: { visible: false },
       },
       crosshair: {
         vertLine: { color: '#3a8f9f', width: 1, style: 2, labelBackgroundColor: '#1a6b7a' },
@@ -220,6 +243,11 @@ export function ChartView({ rawBars, fileName, onReset }: ChartViewProps) {
             <Globe size={13} className="text-muted-foreground" />
             <TimezoneSelector offset={tzOffset} onOffsetChange={setTzOffset} />
           </div>
+          <ProjectManager
+            onSave={handleSaveProject}
+            onLoad={onLoadProject}
+            currentProjectName={projectName}
+          />
           <button
             className="toolbar-btn text-xs"
             onClick={onReset}
