@@ -224,11 +224,11 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
       },
       grid: { vertLines: { visible: false }, horzLines: { visible: false } },
       crosshair: {
-        vertLine: { color: '#3a8f9f', width: 1, style: 2, labelBackgroundColor: '#1a6b7a' },
-        horzLine: { color: '#3a8f9f', width: 1, style: 2, labelBackgroundColor: '#1a6b7a' },
+        vertLine: { color: '#c47d2e', width: 1, style: 2, labelBackgroundColor: '#8b5e14' },
+        horzLine: { color: '#c47d2e', width: 1, style: 2, labelBackgroundColor: '#8b5e14' },
       },
-      rightPriceScale: { borderColor: '#2a3040', scaleMargins: { top: 0.1, bottom: 0.2 } },
-      timeScale: { borderColor: '#2a3040', timeVisible: true, secondsVisible: false },
+      rightPriceScale: { borderColor: '#2a2218', scaleMargins: { top: 0.1, bottom: 0.2 } },
+      timeScale: { borderColor: '#2a2218', timeVisible: true, secondsVisible: false },
     });
 
     let mainSeries: ISeriesApi<any>;
