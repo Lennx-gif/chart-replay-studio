@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Save, FolderOpen, Trash2, X } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Save, FolderOpen, Trash2, X, Loader2 } from 'lucide-react';
 import { listProjects, deleteProject, type SavedProject } from '@/lib/projectStorage';
 import { toast } from 'sonner';
 
@@ -12,7 +12,19 @@ interface ProjectManagerProps {
 export function ProjectManager({ onSave, onLoad, currentProjectName }: ProjectManagerProps) {
   const [showPanel, setShowPanel] = useState(false);
   const [saveName, setSaveName] = useState(currentProjectName || '');
-  const projects = listProjects();
+  const [projects, setProjects] = useState<SavedProject[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const fetchProjects = useCallback(async () => {
+    setLoading(true);
+    const list = await listProjects();
+    setProjects(list);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (showPanel) fetchProjects();
+  }, [showPanel, fetchProjects]);
 
   const handleSave = () => {
     const name = saveName.trim();
@@ -25,9 +37,14 @@ export function ProjectManager({ onSave, onLoad, currentProjectName }: ProjectMa
     toast.success(`Project "${name}" saved`);
   };
 
-  const handleDelete = (id: string, name: string) => {
-    deleteProject(id);
-    toast.success(`Deleted "${name}"`);
+  const handleDelete = async (id: string, name: string) => {
+    try {
+      await deleteProject(id);
+      setProjects((prev) => prev.filter((p) => p.id !== id));
+      toast.success(`Deleted "${name}"`);
+    } catch {
+      toast.error('Failed to delete project');
+    }
   };
 
   return (
@@ -67,13 +84,10 @@ export function ProjectManager({ onSave, onLoad, currentProjectName }: ProjectMa
                 className="flex-1 bg-background border border-border rounded px-2 py-1 text-xs text-foreground focus:outline-none focus:border-primary"
                 placeholder="Project name…"
                 value={saveName}
-                onChange={e => setSaveName(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleSave()}
+                onChange={(e) => setSaveName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSave()}
               />
-              <button
-                className="toolbar-btn text-xs px-3"
-                onClick={handleSave}
-              >
+              <button className="toolbar-btn text-xs px-3" onClick={handleSave}>
                 Save
               </button>
             </div>
@@ -81,10 +95,14 @@ export function ProjectManager({ onSave, onLoad, currentProjectName }: ProjectMa
 
           {/* Project list */}
           <div className="max-h-60 overflow-y-auto">
-            {projects.length === 0 ? (
+            {loading ? (
+              <div className="p-4 flex items-center justify-center">
+                <Loader2 size={16} className="animate-spin text-muted-foreground" />
+              </div>
+            ) : projects.length === 0 ? (
               <div className="p-4 text-center text-xs text-muted-foreground">No saved projects</div>
             ) : (
-              projects.map(p => (
+              projects.map((p) => (
                 <div
                   key={p.id}
                   className="flex items-center justify-between px-3 py-2 hover:bg-muted/50 cursor-pointer group"
@@ -97,8 +115,8 @@ export function ProjectManager({ onSave, onLoad, currentProjectName }: ProjectMa
                     </div>
                   </div>
                   <button
-                    className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-short p-1"
-                    onClick={e => { e.stopPropagation(); handleDelete(p.id, p.name); }}
+                    className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive p-1"
+                    onClick={(e) => { e.stopPropagation(); handleDelete(p.id, p.name); }}
                   >
                     <Trash2 size={12} />
                   </button>
