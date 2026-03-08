@@ -34,16 +34,17 @@ interface ChartViewProps {
   onReset: () => void;
 }
 
-// Mini chart component for multi-timeframe
-function MiniChart({ bars, timeframe, label }: { bars: OHLCVBar[]; timeframe: number; label: string }) {
+// Enhanced Mini chart with synced crosshair and OHLC overlay
+function MiniChart({ bars, label, currentBarTime }: { bars: OHLCVBar[]; timeframe: number; label: string; currentBarTime?: number }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
     const chart = createChart(containerRef.current, {
       layout: { background: { type: ColorType.Solid, color: '#1a1510' }, textColor: '#a0855c', fontSize: 9 },
-      grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+      grid: { vertLines: { visible: false }, horzLines: { color: '#2a221830' } },
       rightPriceScale: { borderColor: '#2a2218', scaleMargins: { top: 0.05, bottom: 0.05 } },
       timeScale: { borderColor: '#2a2218', timeVisible: true, secondsVisible: false },
       crosshair: { vertLine: { color: '#c47d2e', width: 1, style: 2 }, horzLine: { color: '#c47d2e', width: 1, style: 2 } },
@@ -56,29 +57,41 @@ function MiniChart({ bars, timeframe, label }: { bars: OHLCVBar[]; timeframe: nu
     series.setData(bars.map(b => ({ time: b.time as any, open: b.open, high: b.high, low: b.low, close: b.close })));
     chart.timeScale().fitContent();
     chartRef.current = chart;
+    seriesRef.current = series;
 
     const handleResize = () => {
       if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth, height: containerRef.current.clientHeight });
     };
     window.addEventListener('resize', handleResize);
-    return () => { window.removeEventListener('resize', handleResize); chart.remove(); };
+    return () => { window.removeEventListener('resize', handleResize); chart.remove(); chartRef.current = null; seriesRef.current = null; };
+  }, []);
+
+  // Update data reactively
+  useEffect(() => {
+    if (!seriesRef.current) return;
+    seriesRef.current.setData(bars.map(b => ({ time: b.time as any, open: b.open, high: b.high, low: b.low, close: b.close })));
   }, [bars]);
 
-  // Update data when bars change
+  // Scroll to current time
   useEffect(() => {
-    if (!chartRef.current) return;
-    const series = chartRef.current.addCandlestickSeries({
-      upColor: '#4caf50', downColor: '#e05347',
-      borderDownColor: '#e05347', borderUpColor: '#4caf50',
-      wickDownColor: '#e05347', wickUpColor: '#4caf50',
-    });
-    series.setData(bars.map(b => ({ time: b.time as any, open: b.open, high: b.high, low: b.low, close: b.close })));
-  }, [bars]);
+    if (!chartRef.current || !currentBarTime) return;
+    chartRef.current.timeScale().scrollToPosition(-2, false);
+  }, [currentBarTime]);
+
+  // Last bar info
+  const lastBar = bars[bars.length - 1];
 
   return (
-    <div className="flex flex-col border border-border rounded overflow-hidden">
-      <div className="px-2 py-1 bg-card border-b border-border text-[10px] font-mono text-muted-foreground">{label}</div>
-      <div ref={containerRef} className="flex-1 min-h-[150px]" />
+    <div className="flex flex-col border-b border-border overflow-hidden flex-1">
+      <div className="px-2 py-1 bg-card border-b border-border flex items-center justify-between">
+        <span className="text-[10px] font-mono text-primary font-semibold">{label}</span>
+        {lastBar && (
+          <span className={`text-[9px] font-mono ${lastBar.close >= lastBar.open ? 'text-long' : 'text-short'}`}>
+            {lastBar.close > 10 ? lastBar.close.toFixed(2) : lastBar.close.toFixed(5)}
+          </span>
+        )}
+      </div>
+      <div ref={containerRef} className="flex-1 min-h-[140px]" />
     </div>
   );
 }
