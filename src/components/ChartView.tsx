@@ -34,16 +34,17 @@ interface ChartViewProps {
   onReset: () => void;
 }
 
-// Mini chart component for multi-timeframe
-function MiniChart({ bars, timeframe, label }: { bars: OHLCVBar[]; timeframe: number; label: string }) {
+// Enhanced Mini chart with synced crosshair and OHLC overlay
+function MiniChart({ bars, label, currentBarTime }: { bars: OHLCVBar[]; timeframe: number; label: string; currentBarTime?: number }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
     const chart = createChart(containerRef.current, {
       layout: { background: { type: ColorType.Solid, color: '#1a1510' }, textColor: '#a0855c', fontSize: 9 },
-      grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+      grid: { vertLines: { visible: false }, horzLines: { color: '#2a221830' } },
       rightPriceScale: { borderColor: '#2a2218', scaleMargins: { top: 0.05, bottom: 0.05 } },
       timeScale: { borderColor: '#2a2218', timeVisible: true, secondsVisible: false },
       crosshair: { vertLine: { color: '#c47d2e', width: 1, style: 2 }, horzLine: { color: '#c47d2e', width: 1, style: 2 } },
@@ -56,29 +57,41 @@ function MiniChart({ bars, timeframe, label }: { bars: OHLCVBar[]; timeframe: nu
     series.setData(bars.map(b => ({ time: b.time as any, open: b.open, high: b.high, low: b.low, close: b.close })));
     chart.timeScale().fitContent();
     chartRef.current = chart;
+    seriesRef.current = series;
 
     const handleResize = () => {
       if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth, height: containerRef.current.clientHeight });
     };
     window.addEventListener('resize', handleResize);
-    return () => { window.removeEventListener('resize', handleResize); chart.remove(); };
+    return () => { window.removeEventListener('resize', handleResize); chart.remove(); chartRef.current = null; seriesRef.current = null; };
+  }, []);
+
+  // Update data reactively
+  useEffect(() => {
+    if (!seriesRef.current) return;
+    seriesRef.current.setData(bars.map(b => ({ time: b.time as any, open: b.open, high: b.high, low: b.low, close: b.close })));
   }, [bars]);
 
-  // Update data when bars change
+  // Scroll to current time
   useEffect(() => {
-    if (!chartRef.current) return;
-    const series = chartRef.current.addCandlestickSeries({
-      upColor: '#4caf50', downColor: '#e05347',
-      borderDownColor: '#e05347', borderUpColor: '#4caf50',
-      wickDownColor: '#e05347', wickUpColor: '#4caf50',
-    });
-    series.setData(bars.map(b => ({ time: b.time as any, open: b.open, high: b.high, low: b.low, close: b.close })));
-  }, [bars]);
+    if (!chartRef.current || !currentBarTime) return;
+    chartRef.current.timeScale().scrollToPosition(-2, false);
+  }, [currentBarTime]);
+
+  // Last bar info
+  const lastBar = bars[bars.length - 1];
 
   return (
-    <div className="flex flex-col border border-border rounded overflow-hidden">
-      <div className="px-2 py-1 bg-card border-b border-border text-[10px] font-mono text-muted-foreground">{label}</div>
-      <div ref={containerRef} className="flex-1 min-h-[150px]" />
+    <div className="flex flex-col border-b border-border overflow-hidden flex-1">
+      <div className="px-2 py-1 bg-card border-b border-border flex items-center justify-between">
+        <span className="text-[10px] font-mono text-primary font-semibold">{label}</span>
+        {lastBar && (
+          <span className={`text-[9px] font-mono ${lastBar.close >= lastBar.open ? 'text-long' : 'text-short'}`}>
+            {lastBar.close > 10 ? lastBar.close.toFixed(2) : lastBar.close.toFixed(5)}
+          </span>
+        )}
+      </div>
+      <div ref={containerRef} className="flex-1 min-h-[140px]" />
     </div>
   );
 }
@@ -139,11 +152,14 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
   const totalBars = allBars.length;
   const visibleBars = allBars.slice(0, Math.min(currentBarIndex, totalBars));
 
-  // Multi-timeframe bars
+  // Multi-timeframe bars - compute 3 higher TFs relative to current
+  const tf1Val = Math.max(baseTimeframe, 15);
+  const tf2Val = Math.max(baseTimeframe * 4, 60);
+  const tf3Val = Math.max(baseTimeframe * 16, 240);
   const multiTFBars = showMultiChart ? {
-    tf1: applyTimezoneOffset(resampleBars(rawBars, Math.max(baseTimeframe, 15)), tzOffset).slice(0, Math.min(currentBarIndex * 3, allBars.length)),
-    tf2: applyTimezoneOffset(resampleBars(rawBars, Math.max(baseTimeframe * 4, 60)), tzOffset).slice(0, Math.min(currentBarIndex, allBars.length)),
-    tf3: applyTimezoneOffset(resampleBars(rawBars, Math.max(baseTimeframe * 16, 240)), tzOffset).slice(0, Math.min(currentBarIndex, allBars.length)),
+    tf1: { bars: applyTimezoneOffset(resampleBars(rawBars, tf1Val), tzOffset).slice(0, Math.min(currentBarIndex * 3, allBars.length)), val: tf1Val },
+    tf2: { bars: applyTimezoneOffset(resampleBars(rawBars, tf2Val), tzOffset).slice(0, Math.min(currentBarIndex, allBars.length)), val: tf2Val },
+    tf3: { bars: applyTimezoneOffset(resampleBars(rawBars, tf3Val), tzOffset).slice(0, Math.min(currentBarIndex, allBars.length)), val: tf3Val },
   } : null;
 
   const lastBar = visibleBars[visibleBars.length - 1];
@@ -455,10 +471,19 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
       <div className="flex-1 flex overflow-hidden relative">
         {/* Multi-TF side panel */}
         {showMultiChart && multiTFBars && (
-          <div className="w-64 border-r border-border flex flex-col gap-0 overflow-y-auto bg-background">
-            <MiniChart bars={multiTFBars.tf1} timeframe={Math.max(baseTimeframe, 15)} label={`${Math.max(baseTimeframe, 15)}m`} />
-            <MiniChart bars={multiTFBars.tf2} timeframe={Math.max(baseTimeframe * 4, 60)} label={`${Math.max(baseTimeframe * 4, 60) >= 60 ? Math.max(baseTimeframe * 4, 60) / 60 + 'H' : Math.max(baseTimeframe * 4, 60) + 'm'}`} />
-            <MiniChart bars={multiTFBars.tf3} timeframe={Math.max(baseTimeframe * 16, 240)} label={`${Math.max(baseTimeframe * 16, 240) / 60}H`} />
+          <div className="w-72 border-r border-border flex flex-col overflow-hidden bg-background">
+            {[multiTFBars.tf1, multiTFBars.tf2, multiTFBars.tf3].map((tf, i) => {
+              const label = tf.val >= 1440 ? `${tf.val / 1440}D` : tf.val >= 60 ? `${tf.val / 60}H` : `${tf.val}m`;
+              return (
+                <MiniChart
+                  key={i}
+                  bars={tf.bars}
+                  timeframe={tf.val}
+                  label={label}
+                  currentBarTime={lastBar?.time}
+                />
+              );
+            })}
           </div>
         )}
 
@@ -476,16 +501,14 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
           />
         </div>
 
-        {/* Trade panel */}
-        {showTradePanel && (
-          <TradePanel
-            currentPrice={currentPrice}
-            onPlaceOrder={handlePlaceOrder}
-            onCloseOrder={handleCloseOrder}
-            openOrders={openOrders}
-            startingBalance={startingBalance}
-          />
-        )}
+        {/* Trade panel - always rendered, handles its own collapse */}
+        <TradePanel
+          currentPrice={currentPrice}
+          onPlaceOrder={handlePlaceOrder}
+          onCloseOrder={handleCloseOrder}
+          openOrders={openOrders}
+          startingBalance={startingBalance}
+        />
 
         {/* Journal overlay */}
         {showJournal && (
