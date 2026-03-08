@@ -270,12 +270,17 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
     window.addEventListener('resize', handleResize);
 
     return () => { window.removeEventListener('resize', handleResize); chart.remove(); chartRef.current = null; };
-  }, []);
+  }, [chartStyle]);
 
   // Update series data
   useEffect(() => {
     if (!seriesRef.current || !volumeSeriesRef.current) return;
-    seriesRef.current.setData(visibleBars.map(b => ({ time: b.time as any, open: b.open, high: b.high, low: b.low, close: b.close })));
+    const isOHLC = chartStyle === 'candles' || chartStyle === 'bars';
+    if (isOHLC) {
+      seriesRef.current.setData(visibleBars.map(b => ({ time: b.time as any, open: b.open, high: b.high, low: b.low, close: b.close })));
+    } else {
+      seriesRef.current.setData(visibleBars.map(b => ({ time: b.time as any, value: b.close })));
+    }
     volumeSeriesRef.current.setData(visibleBars.map(b => ({
       time: b.time as any, value: b.volume,
       color: b.close >= b.open ? 'rgba(38, 166, 154, 0.3)' : 'rgba(239, 83, 80, 0.3)',
