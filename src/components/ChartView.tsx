@@ -349,9 +349,25 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
       {/* Top bar */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-card">
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <BarChart3 size={18} className="text-primary" />
-            <span className="text-sm font-semibold text-foreground">{fileName}</span>
+          <SymbolSwitcher currentSymbol={fileName} onSymbolChange={onSymbolChange} />
+          <div className="w-px h-5 bg-border" />
+          {/* Chart style selector */}
+          <div className="flex items-center gap-0.5">
+            {([
+              { style: 'candles' as ChartStyle, icon: <CandlestickChart size={14} />, label: 'Candles' },
+              { style: 'bars' as ChartStyle, icon: <BarChart size={14} />, label: 'Bars' },
+              { style: 'line' as ChartStyle, icon: <LineChart size={14} />, label: 'Line' },
+              { style: 'area' as ChartStyle, icon: <LineChart size={14} />, label: 'Area' },
+            ]).map(({ style, icon, label }) => (
+              <button
+                key={style}
+                className={`toolbar-btn text-xs gap-1 ${chartStyle === style ? 'toolbar-btn-active' : ''}`}
+                onClick={() => setChartStyle(style)}
+                title={label}
+              >
+                {icon}
+              </button>
+            ))}
           </div>
           <div className="w-px h-5 bg-border" />
           <TimeframeSelector baseTimeframe={baseTimeframe} currentTimeframe={timeframe} onTimeframeChange={handleTimeframeChange} />
