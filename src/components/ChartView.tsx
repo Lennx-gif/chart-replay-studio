@@ -231,11 +231,25 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
       timeScale: { borderColor: '#2a3040', timeVisible: true, secondsVisible: false },
     });
 
-    const candleSeries = chart.addCandlestickSeries({
-      upColor: '#26a69a', downColor: '#ef5350',
-      borderDownColor: '#ef5350', borderUpColor: '#26a69a',
-      wickDownColor: '#ef5350', wickUpColor: '#26a69a',
-    });
+    let mainSeries: ISeriesApi<any>;
+    if (chartStyle === 'line') {
+      mainSeries = chart.addLineSeries({ color: '#26a69a', lineWidth: 2 });
+    } else if (chartStyle === 'area') {
+      mainSeries = chart.addAreaSeries({
+        topColor: 'rgba(38, 166, 154, 0.4)', bottomColor: 'rgba(38, 166, 154, 0.0)',
+        lineColor: '#26a69a', lineWidth: 2,
+      });
+    } else if (chartStyle === 'bars') {
+      mainSeries = chart.addBarSeries({
+        upColor: '#26a69a', downColor: '#ef5350',
+      });
+    } else {
+      mainSeries = chart.addCandlestickSeries({
+        upColor: '#26a69a', downColor: '#ef5350',
+        borderDownColor: '#ef5350', borderUpColor: '#26a69a',
+        wickDownColor: '#ef5350', wickUpColor: '#26a69a',
+      });
+    }
 
     const volumeSeries = chart.addHistogramSeries({
       color: '#26a69a',
@@ -245,7 +259,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
     volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
 
     chartRef.current = chart;
-    seriesRef.current = candleSeries;
+    seriesRef.current = mainSeries;
     volumeSeriesRef.current = volumeSeries;
 
     const handleResize = () => {
