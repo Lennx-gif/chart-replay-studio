@@ -68,9 +68,9 @@ function MiniChart({ bars, timeframe, label }: { bars: OHLCVBar[]; timeframe: nu
   useEffect(() => {
     if (!chartRef.current) return;
     const series = chartRef.current.addCandlestickSeries({
-      upColor: '#26a69a', downColor: '#ef5350',
-      borderDownColor: '#ef5350', borderUpColor: '#26a69a',
-      wickDownColor: '#ef5350', wickUpColor: '#26a69a',
+      upColor: '#4caf50', downColor: '#e05347',
+      borderDownColor: '#e05347', borderUpColor: '#4caf50',
+      wickDownColor: '#e05347', wickUpColor: '#4caf50',
     });
     series.setData(bars.map(b => ({ time: b.time as any, open: b.open, high: b.high, low: b.low, close: b.close })));
   }, [bars]);
