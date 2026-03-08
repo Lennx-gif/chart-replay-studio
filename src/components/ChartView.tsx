@@ -152,11 +152,14 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
   const totalBars = allBars.length;
   const visibleBars = allBars.slice(0, Math.min(currentBarIndex, totalBars));
 
-  // Multi-timeframe bars
+  // Multi-timeframe bars - compute 3 higher TFs relative to current
+  const tf1Val = Math.max(baseTimeframe, 15);
+  const tf2Val = Math.max(baseTimeframe * 4, 60);
+  const tf3Val = Math.max(baseTimeframe * 16, 240);
   const multiTFBars = showMultiChart ? {
-    tf1: applyTimezoneOffset(resampleBars(rawBars, Math.max(baseTimeframe, 15)), tzOffset).slice(0, Math.min(currentBarIndex * 3, allBars.length)),
-    tf2: applyTimezoneOffset(resampleBars(rawBars, Math.max(baseTimeframe * 4, 60)), tzOffset).slice(0, Math.min(currentBarIndex, allBars.length)),
-    tf3: applyTimezoneOffset(resampleBars(rawBars, Math.max(baseTimeframe * 16, 240)), tzOffset).slice(0, Math.min(currentBarIndex, allBars.length)),
+    tf1: { bars: applyTimezoneOffset(resampleBars(rawBars, tf1Val), tzOffset).slice(0, Math.min(currentBarIndex * 3, allBars.length)), val: tf1Val },
+    tf2: { bars: applyTimezoneOffset(resampleBars(rawBars, tf2Val), tzOffset).slice(0, Math.min(currentBarIndex, allBars.length)), val: tf2Val },
+    tf3: { bars: applyTimezoneOffset(resampleBars(rawBars, tf3Val), tzOffset).slice(0, Math.min(currentBarIndex, allBars.length)), val: tf3Val },
   } : null;
 
   const lastBar = visibleBars[visibleBars.length - 1];
