@@ -187,13 +187,21 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
     }
   }, [lastBar?.time]);
 
-  // Place order
+  // Place market order
   const handlePlaceOrder = useCallback((side: OrderSide, size: number, sl?: number, tp?: number) => {
     if (!lastBar) return;
     const order = createMarketOrder(side, lastBar.close, lastBar.time, size, sl, tp);
     setOrders(prev => [...prev, order]);
     toast.success(`${side.toUpperCase()} order placed @ ${lastBar.close.toFixed(5)}`);
   }, [lastBar]);
+
+  // Place pending/limit order from projection tool
+  const handlePlacePendingOrder = useCallback((side: OrderSide, price: number, sl?: number, tp?: number) => {
+    const { createLimitOrder } = require('@/lib/tradeEngine');
+    const order = createLimitOrder(side, price, 1, sl, tp);
+    setOrders(prev => [...prev, order]);
+    toast.success(`Pending ${side.toUpperCase()} limit @ ${price.toFixed(5)}`);
+  }, []);
 
   // Close order manually
   const handleCloseOrder = useCallback((orderId: string) => {
