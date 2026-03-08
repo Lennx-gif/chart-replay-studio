@@ -283,7 +283,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
     }
     volumeSeriesRef.current.setData(visibleBars.map(b => ({
       time: b.time as any, value: b.volume,
-      color: b.close >= b.open ? 'rgba(38, 166, 154, 0.3)' : 'rgba(239, 83, 80, 0.3)',
+      color: b.close >= b.open ? 'rgba(76, 175, 80, 0.25)' : 'rgba(224, 83, 71, 0.25)',
     })));
 
     // Add markers for open orders (entry lines via price lines)
