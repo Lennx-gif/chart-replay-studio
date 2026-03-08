@@ -80,7 +80,7 @@ function MiniChart({ bars, timeframe, label }: { bars: OHLCVBar[]; timeframe: nu
   );
 }
 
-export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadProject, onReset }: ChartViewProps) {
+export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadProject, onSymbolChange, onReset }: ChartViewProps) {
   const containerRef = useRef<HTMLDivElement>(null!);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
