@@ -197,7 +197,6 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
 
   // Place pending/limit order from projection tool
   const handlePlacePendingOrder = useCallback((side: OrderSide, price: number, sl?: number, tp?: number) => {
-    const { createLimitOrder } = require('@/lib/tradeEngine');
     const order = createLimitOrder(side, price, 1, sl, tp);
     setOrders(prev => [...prev, order]);
     toast.success(`Pending ${side.toUpperCase()} limit @ ${price.toFixed(5)}`);
