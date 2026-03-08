@@ -1,6 +1,7 @@
 import {
   TrendingUp, Minus, Square, MousePointer, Trash2,
-  ArrowUpRight, GitCommitHorizontal, Target, TrendingDown, Columns
+  ArrowUpRight, GitCommitHorizontal, TrendingDown, Columns,
+  Crosshair
 } from 'lucide-react';
 import type { DrawingType } from '@/lib/drawings';
 
@@ -11,19 +12,20 @@ interface ChartToolbarProps {
   drawingCount: number;
 }
 
-const TOOL_GROUPS: { label: string; tools: { type: DrawingType | null; icon: React.ReactNode; label: string }[] }[] = [
+const TOOL_GROUPS: { label: string; tools: { type: DrawingType | null; icon: React.ReactNode; label: string; shortcut?: string }[] }[] = [
   {
     label: 'Cursor',
     tools: [
-      { type: null, icon: <MousePointer size={14} />, label: 'Select' },
+      { type: null, icon: <MousePointer size={14} />, label: 'Select', shortcut: 'Esc' },
+      { type: 'crosshair' as any, icon: <Crosshair size={14} />, label: 'Crosshair' },
     ],
   },
   {
     label: 'Lines',
     tools: [
-      { type: 'horizontal', icon: <Minus size={14} />, label: 'H-Line' },
+      { type: 'horizontal', icon: <Minus size={14} />, label: 'H-Line', shortcut: 'H' },
       { type: 'vertical', icon: <Columns size={14} />, label: 'V-Line' },
-      { type: 'trendline', icon: <TrendingUp size={14} />, label: 'Trendline' },
+      { type: 'trendline', icon: <TrendingUp size={14} />, label: 'Trendline', shortcut: 'T' },
       { type: 'ray', icon: <ArrowUpRight size={14} />, label: 'Ray' },
     ],
   },
@@ -31,7 +33,7 @@ const TOOL_GROUPS: { label: string; tools: { type: DrawingType | null; icon: Rea
     label: 'Shapes',
     tools: [
       { type: 'rectangle', icon: <Square size={14} />, label: 'Rectangle' },
-      { type: 'fibonacci', icon: <GitCommitHorizontal size={14} />, label: 'Fib Retrace' },
+      { type: 'fibonacci', icon: <GitCommitHorizontal size={14} />, label: 'Fib Retrace', shortcut: 'F' },
     ],
   },
   {
@@ -45,19 +47,20 @@ const TOOL_GROUPS: { label: string; tools: { type: DrawingType | null; icon: Rea
 
 export function ChartToolbar({ activeTool, onToolChange, onClearDrawings, drawingCount }: ChartToolbarProps) {
   return (
-    <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-border bg-card overflow-x-auto">
+    <div className="flex items-center gap-0.5 px-2 py-1 border-b border-border bg-card overflow-x-auto">
       {TOOL_GROUPS.map((group, gi) => (
         <div key={group.label} className="flex items-center gap-0.5">
           {gi > 0 && <div className="w-px h-5 bg-border mx-1" />}
-          {group.tools.map(({ type, icon, label }) => (
+          {group.tools.map(({ type, icon, label, shortcut }) => (
             <button
               key={label}
               className={`toolbar-btn gap-1.5 ${activeTool === type ? 'toolbar-btn-active' : ''}`}
               onClick={() => onToolChange(type)}
-              title={label}
+              title={`${label}${shortcut ? ` (${shortcut})` : ''}`}
             >
               {icon}
               <span className="hidden md:inline text-[11px]">{label}</span>
+              {shortcut && <span className="hidden lg:inline text-[9px] text-muted-foreground ml-0.5">{shortcut}</span>}
             </button>
           ))}
         </div>
@@ -76,6 +79,13 @@ export function ChartToolbar({ activeTool, onToolChange, onClearDrawings, drawin
           </button>
         </>
       )}
+
+      {/* Hints */}
+      <div className="ml-auto hidden lg:flex items-center gap-2 text-[9px] text-muted-foreground font-mono">
+        <span>Del: delete selected</span>
+        <span>Right-click: context menu</span>
+        <span>Drag: move drawing</span>
+      </div>
     </div>
   );
 }
