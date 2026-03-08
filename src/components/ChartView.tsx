@@ -217,8 +217,8 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
     if (!containerRef.current) return;
     const chart = createChart(containerRef.current, {
       layout: {
-        background: { type: ColorType.Solid, color: '#171c24' },
-        textColor: '#8a919e',
+        background: { type: ColorType.Solid, color: '#1a1510' },
+        textColor: '#a0855c',
         fontFamily: "'JetBrains Mono', monospace",
         fontSize: 11,
       },
