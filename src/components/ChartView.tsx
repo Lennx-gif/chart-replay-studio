@@ -395,6 +395,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
             </button>
           </div>
 
+          <BalanceSettings />
           <ProjectManager onSave={handleSaveProject} onLoad={onLoadProject} currentProjectName={projectName} />
           <button className="toolbar-btn text-xs" onClick={onReset}>New File</button>
         </div>
