@@ -444,6 +444,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
             onPlaceOrder={handlePlaceOrder}
             onCloseOrder={handleCloseOrder}
             openOrders={openOrders}
+            startingBalance={startingBalance}
           />
         )}
 
