@@ -17,9 +17,12 @@ import { TradeJournal } from './TradeJournal';
 import { GoToDate } from './GoToDate';
 import { SessionOverlay } from './SessionOverlay';
 import { BalanceSettings } from './BalanceSettings';
+import { SymbolSwitcher } from './SymbolSwitcher';
 import { useAuth } from '@/contexts/AuthContext';
-import { Globe, BarChart3, BookOpen, Columns, Eye, EyeOff } from 'lucide-react';
+import { Globe, BarChart3, BookOpen, Columns, Eye, EyeOff, CandlestickChart, LineChart, BarChart } from 'lucide-react';
 import { toast } from 'sonner';
+
+export type ChartStyle = 'candles' | 'line' | 'bars' | 'area';
 
 interface ChartViewProps {
   rawBars: OHLCVBar[];
@@ -27,6 +30,7 @@ interface ChartViewProps {
   csvText: string;
   loadedProject: SavedProject | null;
   onLoadProject: (project: SavedProject) => void;
+  onSymbolChange: (symbol: string, timeframe: string) => void;
   onReset: () => void;
 }
 
@@ -79,7 +83,7 @@ function MiniChart({ bars, timeframe, label }: { bars: OHLCVBar[]; timeframe: nu
   );
 }
 
-export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadProject, onReset }: ChartViewProps) {
+export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadProject, onSymbolChange, onReset }: ChartViewProps) {
   const containerRef = useRef<HTMLDivElement>(null!);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -98,6 +102,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
   const [speed, setSpeed] = useState(loadedProject?.speed || 1);
   const [activeTool, setActiveTool] = useState<DrawingType | null>(null);
   const [drawings, setDrawings] = useState<Drawing[]>(loadedProject?.drawings || []);
+  const [chartStyle, setChartStyle] = useState<ChartStyle>('candles');
 
   // Trading state
   const [orders, setOrders] = useState<Order[]>([]);
@@ -226,11 +231,25 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
       timeScale: { borderColor: '#2a3040', timeVisible: true, secondsVisible: false },
     });
 
-    const candleSeries = chart.addCandlestickSeries({
-      upColor: '#26a69a', downColor: '#ef5350',
-      borderDownColor: '#ef5350', borderUpColor: '#26a69a',
-      wickDownColor: '#ef5350', wickUpColor: '#26a69a',
-    });
+    let mainSeries: ISeriesApi<any>;
+    if (chartStyle === 'line') {
+      mainSeries = chart.addLineSeries({ color: '#26a69a', lineWidth: 2 });
+    } else if (chartStyle === 'area') {
+      mainSeries = chart.addAreaSeries({
+        topColor: 'rgba(38, 166, 154, 0.4)', bottomColor: 'rgba(38, 166, 154, 0.0)',
+        lineColor: '#26a69a', lineWidth: 2,
+      });
+    } else if (chartStyle === 'bars') {
+      mainSeries = chart.addBarSeries({
+        upColor: '#26a69a', downColor: '#ef5350',
+      });
+    } else {
+      mainSeries = chart.addCandlestickSeries({
+        upColor: '#26a69a', downColor: '#ef5350',
+        borderDownColor: '#ef5350', borderUpColor: '#26a69a',
+        wickDownColor: '#ef5350', wickUpColor: '#26a69a',
+      });
+    }
 
     const volumeSeries = chart.addHistogramSeries({
       color: '#26a69a',
@@ -240,7 +259,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
     volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
 
     chartRef.current = chart;
-    seriesRef.current = candleSeries;
+    seriesRef.current = mainSeries;
     volumeSeriesRef.current = volumeSeries;
 
     const handleResize = () => {
@@ -251,12 +270,17 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
     window.addEventListener('resize', handleResize);
 
     return () => { window.removeEventListener('resize', handleResize); chart.remove(); chartRef.current = null; };
-  }, []);
+  }, [chartStyle]);
 
   // Update series data
   useEffect(() => {
     if (!seriesRef.current || !volumeSeriesRef.current) return;
-    seriesRef.current.setData(visibleBars.map(b => ({ time: b.time as any, open: b.open, high: b.high, low: b.low, close: b.close })));
+    const isOHLC = chartStyle === 'candles' || chartStyle === 'bars';
+    if (isOHLC) {
+      seriesRef.current.setData(visibleBars.map(b => ({ time: b.time as any, open: b.open, high: b.high, low: b.low, close: b.close })));
+    } else {
+      seriesRef.current.setData(visibleBars.map(b => ({ time: b.time as any, value: b.close })));
+    }
     volumeSeriesRef.current.setData(visibleBars.map(b => ({
       time: b.time as any, value: b.volume,
       color: b.close >= b.open ? 'rgba(38, 166, 154, 0.3)' : 'rgba(239, 83, 80, 0.3)',
@@ -325,9 +349,25 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
       {/* Top bar */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-card">
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <BarChart3 size={18} className="text-primary" />
-            <span className="text-sm font-semibold text-foreground">{fileName}</span>
+          <SymbolSwitcher currentSymbol={fileName} onSymbolChange={onSymbolChange} />
+          <div className="w-px h-5 bg-border" />
+          {/* Chart style selector */}
+          <div className="flex items-center gap-0.5">
+            {([
+              { style: 'candles' as ChartStyle, icon: <CandlestickChart size={14} />, label: 'Candles' },
+              { style: 'bars' as ChartStyle, icon: <BarChart size={14} />, label: 'Bars' },
+              { style: 'line' as ChartStyle, icon: <LineChart size={14} />, label: 'Line' },
+              { style: 'area' as ChartStyle, icon: <LineChart size={14} />, label: 'Area' },
+            ]).map(({ style, icon, label }) => (
+              <button
+                key={style}
+                className={`toolbar-btn text-xs gap-1 ${chartStyle === style ? 'toolbar-btn-active' : ''}`}
+                onClick={() => setChartStyle(style)}
+                title={label}
+              >
+                {icon}
+              </button>
+            ))}
           </div>
           <div className="w-px h-5 bg-border" />
           <TimeframeSelector baseTimeframe={baseTimeframe} currentTimeframe={timeframe} onTimeframeChange={handleTimeframeChange} />
@@ -443,6 +483,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
             onPlaceOrder={handlePlaceOrder}
             onCloseOrder={handleCloseOrder}
             openOrders={openOrders}
+            startingBalance={startingBalance}
           />
         )}
 
