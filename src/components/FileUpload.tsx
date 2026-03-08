@@ -11,9 +11,11 @@ interface FileUploadProps {
 }
 
 const POPULAR_SYMBOLS = [
-  { label: 'Forex', items: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'NZDUSD', 'USDCHF'] },
+  { label: 'Forex', items: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'NZDUSD', 'USDCHF', 'EURGBP'] },
   { label: 'Stocks', items: ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'SPY', 'QQQ'] },
-  { label: 'Commodities', items: ['GC=F', 'SI=F', 'CL=F'] },
+  { label: 'Crypto', items: ['BTC-USD', 'ETH-USD', 'SOL-USD', 'ADA-USD', 'DOGE-USD', 'XRP-USD'] },
+  { label: 'Commodities', items: ['GC=F', 'SI=F', 'CL=F', 'NG=F'] },
+  { label: 'Indices', items: ['^GSPC', '^DJI', '^IXIC', '^VIX'] },
 ];
 
 const TIMEFRAMES = [
