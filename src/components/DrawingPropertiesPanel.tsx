@@ -11,8 +11,9 @@ interface DrawingPropertiesPanelProps {
 }
 
 const COLOR_PRESETS = [
-  '#00bcd4', '#ff9800', '#4caf50', '#ef5350', '#9c27b0',
-  '#ffd54f', '#2196f3', '#e91e63', '#ffffff', '#78909c',
+  '#d4a54a', '#c47d2e', '#a0855c', '#4caf50', '#e05347',
+  '#8b6914', '#ff9800', '#9c27b0', '#2196f3', '#ffd54f',
+  '#e91e63', '#ffffff', '#78909c', '#00bcd4',
 ];
 
 const LINE_STYLES: { value: LineStyle; label: string }[] = [
