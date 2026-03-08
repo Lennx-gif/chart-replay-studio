@@ -506,6 +506,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
             drawings={drawings}
             onDrawingsChange={setDrawings}
             containerRef={containerRef}
+            onPlacePendingOrder={handlePlacePendingOrder}
           />
         </div>
 
