@@ -7,11 +7,14 @@ import { Navigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Loader2, TrendingUp, BarChart3, Activity } from 'lucide-react';
 
+type AuthMode = 'login' | 'signup' | 'forgot';
+
 const Auth = () => {
   const { user, loading } = useAuth();
-  const [isLogin, setIsLogin] = useState(true);
+  const [mode, setMode] = useState<AuthMode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [username, setUsername] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   if (loading) {
@@ -29,15 +32,30 @@ const Auth = () => {
     setSubmitting(true);
 
     try {
-      if (isLogin) {
+      if (mode === 'forgot') {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: `${window.location.origin}/reset-password`,
+        });
+        if (error) throw error;
+        toast.success('Password reset email sent! Check your inbox.');
+        setMode('login');
+      } else if (mode === 'login') {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
         toast.success('Logged in successfully');
       } else {
+        if (!username.trim()) {
+          toast.error('Username is required');
+          setSubmitting(false);
+          return;
+        }
         const { error } = await supabase.auth.signUp({
           email,
           password,
-          options: { emailRedirectTo: window.location.origin },
+          options: {
+            emailRedirectTo: window.location.origin,
+            data: { display_name: username.trim() },
+          },
         });
         if (error) throw error;
         toast.success('Account created! Check your email to confirm.');
@@ -47,6 +65,12 @@ const Auth = () => {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const headings: Record<AuthMode, { title: string; subtitle: string }> = {
+    login: { title: 'Welcome back', subtitle: 'Sign in to continue your session' },
+    signup: { title: 'Create account', subtitle: 'Start backtesting in minutes' },
+    forgot: { title: 'Reset password', subtitle: 'We\'ll send you a reset link' },
   };
 
   return (
@@ -86,15 +110,23 @@ const Auth = () => {
           </div>
 
           <div className="space-y-1">
-            <h2 className="text-2xl font-semibold text-foreground">
-              {isLogin ? 'Welcome back' : 'Create account'}
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              {isLogin ? 'Sign in to continue your session' : 'Start backtesting in minutes'}
-            </p>
+            <h2 className="text-2xl font-semibold text-foreground">{headings[mode].title}</h2>
+            <p className="text-sm text-muted-foreground">{headings[mode].subtitle}</p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            {mode === 'signup' && (
+              <Input
+                type="text"
+                placeholder="Username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+                minLength={2}
+                maxLength={30}
+                className="bg-card border-border"
+              />
+            )}
             <Input
               type="email"
               placeholder="Email"
@@ -103,29 +135,52 @@ const Auth = () => {
               required
               className="bg-card border-border"
             />
-            <Input
-              type="password"
-              placeholder="Password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={6}
-              className="bg-card border-border"
-            />
+            {mode !== 'forgot' && (
+              <Input
+                type="password"
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={6}
+                className="bg-card border-border"
+              />
+            )}
+
+            {mode === 'login' && (
+              <div className="text-right">
+                <button
+                  type="button"
+                  onClick={() => setMode('forgot')}
+                  className="text-xs text-primary hover:underline"
+                >
+                  Forgot password?
+                </button>
+              </div>
+            )}
+
             <Button type="submit" className="w-full" disabled={submitting}>
               {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {isLogin ? 'Sign In' : 'Create Account'}
+              {mode === 'login' ? 'Sign In' : mode === 'signup' ? 'Create Account' : 'Send Reset Link'}
             </Button>
           </form>
 
           <p className="text-center text-sm text-muted-foreground">
-            {isLogin ? "Don't have an account?" : 'Already have an account?'}{' '}
-            <button
-              onClick={() => setIsLogin(!isLogin)}
-              className="text-primary hover:underline font-medium"
-            >
-              {isLogin ? 'Sign up' : 'Sign in'}
-            </button>
+            {mode === 'login' ? (
+              <>
+                Don't have an account?{' '}
+                <button onClick={() => setMode('signup')} className="text-primary hover:underline font-medium">
+                  Sign up
+                </button>
+              </>
+            ) : (
+              <>
+                Already have an account?{' '}
+                <button onClick={() => setMode('login')} className="text-primary hover:underline font-medium">
+                  Sign in
+                </button>
+              </>
+            )}
           </p>
         </div>
       </div>
