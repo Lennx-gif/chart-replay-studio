@@ -16,6 +16,8 @@ import { TradePanel } from './TradePanel';
 import { TradeJournal } from './TradeJournal';
 import { GoToDate } from './GoToDate';
 import { SessionOverlay } from './SessionOverlay';
+import { BalanceSettings } from './BalanceSettings';
+import { useAuth } from '@/contexts/AuthContext';
 import { Globe, BarChart3, BookOpen, Columns, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 
