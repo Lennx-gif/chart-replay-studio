@@ -471,10 +471,19 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
       <div className="flex-1 flex overflow-hidden relative">
         {/* Multi-TF side panel */}
         {showMultiChart && multiTFBars && (
-          <div className="w-64 border-r border-border flex flex-col gap-0 overflow-y-auto bg-background">
-            <MiniChart bars={multiTFBars.tf1} timeframe={Math.max(baseTimeframe, 15)} label={`${Math.max(baseTimeframe, 15)}m`} />
-            <MiniChart bars={multiTFBars.tf2} timeframe={Math.max(baseTimeframe * 4, 60)} label={`${Math.max(baseTimeframe * 4, 60) >= 60 ? Math.max(baseTimeframe * 4, 60) / 60 + 'H' : Math.max(baseTimeframe * 4, 60) + 'm'}`} />
-            <MiniChart bars={multiTFBars.tf3} timeframe={Math.max(baseTimeframe * 16, 240)} label={`${Math.max(baseTimeframe * 16, 240) / 60}H`} />
+          <div className="w-72 border-r border-border flex flex-col overflow-hidden bg-background">
+            {[multiTFBars.tf1, multiTFBars.tf2, multiTFBars.tf3].map((tf, i) => {
+              const label = tf.val >= 1440 ? `${tf.val / 1440}D` : tf.val >= 60 ? `${tf.val / 60}H` : `${tf.val}m`;
+              return (
+                <MiniChart
+                  key={i}
+                  bars={tf.bars}
+                  timeframe={tf.val}
+                  label={label}
+                  currentBarTime={lastBar?.time}
+                />
+              );
+            })}
           </div>
         )}
 
@@ -492,16 +501,14 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
           />
         </div>
 
-        {/* Trade panel */}
-        {showTradePanel && (
-          <TradePanel
-            currentPrice={currentPrice}
-            onPlaceOrder={handlePlaceOrder}
-            onCloseOrder={handleCloseOrder}
-            openOrders={openOrders}
-            startingBalance={startingBalance}
-          />
-        )}
+        {/* Trade panel - always rendered, handles its own collapse */}
+        <TradePanel
+          currentPrice={currentPrice}
+          onPlaceOrder={handlePlaceOrder}
+          onCloseOrder={handleCloseOrder}
+          openOrders={openOrders}
+          startingBalance={startingBalance}
+        />
 
         {/* Journal overlay */}
         {showJournal && (
