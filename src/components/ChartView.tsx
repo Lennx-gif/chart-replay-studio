@@ -446,7 +446,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
 
         {/* Journal overlay */}
         {showJournal && (
-          <TradeJournal orders={orders} onClose={() => setShowJournal(false)} />
+          <TradeJournal orders={orders} onClose={() => setShowJournal(false)} startingBalance={startingBalance} />
         )}
       </div>
 
