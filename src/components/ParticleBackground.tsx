@@ -16,16 +16,16 @@ export function ParticleBackground() {
         fullScreen: { enable: true, zIndex: 0 },
         fpsLimit: 60,
         particles: {
-          number: { value: 35, density: { enable: true, area: 1200 } },
+          number: { value: 35, density: { enable: true, value_area: 1200 } as any },
           color: { value: ['#d4a54a', '#c47d2e', '#a0855c'] },
           shape: { type: 'circle' },
           opacity: {
             value: { min: 0.03, max: 0.12 },
-            animation: { enable: true, speed: 0.3, minimumValue: 0.02, sync: false },
+            animation: { enable: true, speed: 0.3, startValue: 'random' as const, sync: false },
           },
           size: {
             value: { min: 1, max: 3 },
-            animation: { enable: true, speed: 0.5, minimumValue: 0.5, sync: false },
+            animation: { enable: true, speed: 0.5, startValue: 'random' as const, sync: false },
           },
           move: {
             enable: true,
