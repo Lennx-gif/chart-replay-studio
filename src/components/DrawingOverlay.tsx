@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import type { Drawing, DrawingType, DrawingPoint, LineStyle } from '@/lib/drawings';
-import { createDrawingId, DEFAULT_COLORS, DEFAULT_FIB_LEVELS, getClicksNeeded } from '@/lib/drawings';
+import { createDrawingId, DEFAULT_COLORS, DEFAULT_FIB_LEVELS, DEFAULT_FIB_EXT_LEVELS, getClicksNeeded } from '@/lib/drawings';
 import { DrawingFloatingToolbar } from './DrawingFloatingToolbar';
 
 interface DrawingOverlayProps {
@@ -27,7 +27,6 @@ const NUBIAN_SHORT = '#e05347';
 const NUBIAN_GOLD = '#d4a54a';
 const NUBIAN_AMBER = '#c47d2e';
 
-// Hit-test distance threshold in pixels
 const HIT_THRESHOLD = 8;
 
 function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
@@ -61,6 +60,8 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     originalPoints: DrawingPoint[];
   } | null>(null);
   const [toolbarPos, setToolbarPos] = useState<{ x: number; y: number } | null>(null);
+  const isBrushing = useRef(false);
+  const brushPointsRef = useRef<{ x: number; y: number }[]>([]);
 
   const selectedDrawing = drawings.find(d => d.id === selectedDrawingId) || null;
 
@@ -80,7 +81,6 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     return Math.round(price * 10000) / 10000;
   }, []);
 
-  // Hit-test: find the drawing under cursor using proper line-distance
   const hitTestDrawing = useCallback((mx: number, my: number): Drawing | null => {
     if (!chart || !series) return null;
     const timeScale = chart.timeScale();
@@ -88,7 +88,7 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     let bestDist = HIT_THRESHOLD;
 
     for (const d of drawings) {
-      if (d.locked) continue;
+      if (d.locked || d.visible === false) continue;
       let dist = Infinity;
 
       if (d.type === 'horizontal' && d.points[0]) {
@@ -97,7 +97,11 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
       } else if (d.type === 'vertical' && d.points[0]) {
         const x = timeScale.timeToCoordinate(d.points[0].time as any);
         if (x !== null) dist = Math.abs(mx - x);
-      } else if ((d.type === 'trendline' || d.type === 'fibonacci') && d.points.length === 2) {
+      } else if (d.type === 'text' && d.points[0]) {
+        const x = timeScale.timeToCoordinate(d.points[0].time as any);
+        const y = series.priceToCoordinate(d.points[0].price);
+        if (x !== null && y !== null) dist = Math.hypot(mx - x, my - y);
+      } else if (['trendline', 'fibonacci', 'fib_extension', 'info_line', 'measure', 'price_range'].includes(d.type) && d.points.length === 2) {
         const x1 = timeScale.timeToCoordinate(d.points[0].time as any);
         const y1 = series.priceToCoordinate(d.points[0].price);
         const x2 = timeScale.timeToCoordinate(d.points[1].time as any);
@@ -105,7 +109,7 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
         if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
           dist = distToSegment(mx, my, x1, y1, x2, y2);
         }
-      } else if (d.type === 'ray' && d.points.length === 2) {
+      } else if ((d.type === 'ray' || d.type === 'extended_line') && d.points.length === 2) {
         const x1 = timeScale.timeToCoordinate(d.points[0].time as any);
         const y1 = series.priceToCoordinate(d.points[0].price);
         const x2 = timeScale.timeToCoordinate(d.points[1].time as any);
@@ -113,7 +117,7 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
         if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
           dist = distToLine(mx, my, x1, y1, x2, y2);
         }
-      } else if (d.type === 'rectangle' && d.points.length === 2) {
+      } else if ((d.type === 'rectangle' || d.type === 'ellipse') && d.points.length === 2) {
         const x1 = timeScale.timeToCoordinate(d.points[0].time as any);
         const y1 = series.priceToCoordinate(d.points[0].price);
         const x2 = timeScale.timeToCoordinate(d.points[1].time as any);
@@ -121,14 +125,12 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
         if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
           const rx = Math.min(x1, x2), ry = Math.min(y1, y2);
           const rw = Math.abs(x2 - x1), rh = Math.abs(y2 - y1);
-          // Hit on edges
           if (mx >= rx - HIT_THRESHOLD && mx <= rx + rw + HIT_THRESHOLD && my >= ry - HIT_THRESHOLD && my <= ry + rh + HIT_THRESHOLD) {
             const dLeft = Math.abs(mx - rx);
             const dRight = Math.abs(mx - (rx + rw));
             const dTop = Math.abs(my - ry);
             const dBottom = Math.abs(my - (ry + rh));
             dist = Math.min(dLeft, dRight, dTop, dBottom);
-            // Also hit inside
             if (mx >= rx && mx <= rx + rw && my >= ry && my <= ry + rh) dist = 0;
           }
         }
@@ -141,6 +143,24 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
         if (slY !== null) dists.push(Math.abs(my - slY));
         if (tpY !== null) dists.push(Math.abs(my - tpY));
         if (dists.length > 0) dist = Math.min(...dists);
+      } else if (d.type === 'triangle' && d.points.length === 3) {
+        // Hit test on edges of triangle
+        for (let i = 0; i < 3; i++) {
+          const j = (i + 1) % 3;
+          const xi = timeScale.timeToCoordinate(d.points[i].time as any);
+          const yi = series.priceToCoordinate(d.points[i].price);
+          const xj = timeScale.timeToCoordinate(d.points[j].time as any);
+          const yj = series.priceToCoordinate(d.points[j].price);
+          if (xi !== null && yi !== null && xj !== null && yj !== null) {
+            dist = Math.min(dist, distToSegment(mx, my, xi, yi, xj, yj));
+          }
+        }
+      } else if (d.type === 'pitchfork' && d.points.length === 3) {
+        const x0 = timeScale.timeToCoordinate(d.points[0].time as any);
+        const y0 = series.priceToCoordinate(d.points[0].price);
+        if (x0 !== null && y0 !== null) {
+          dist = Math.hypot(mx - x0, my - y0);
+        }
       }
 
       if (dist < bestDist) {
@@ -151,13 +171,12 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     return best;
   }, [chart, series, drawings]);
 
-  // Compute toolbar position for selected drawing
   const computeToolbarPos = useCallback((drawing: Drawing) => {
     if (!chart || !series) return null;
     const timeScale = chart.timeScale();
     if (drawing.type === 'horizontal' && drawing.points[0]) {
       const y = series.priceToCoordinate(drawing.points[0].price);
-      return y !== null ? { x: 60, y: y - 40 } : null;
+      return y !== null ? { x: 80, y: y - 44 } : null;
     }
     if (drawing.type === 'vertical' && drawing.points[0]) {
       const x = timeScale.timeToCoordinate(drawing.points[0].time as any);
@@ -166,12 +185,17 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     if (drawing.points.length >= 2) {
       const x1 = timeScale.timeToCoordinate(drawing.points[0].time as any);
       const y1 = series.priceToCoordinate(drawing.points[0].price);
-      if (x1 !== null && y1 !== null) return { x: x1, y: y1 - 44 };
+      if (x1 !== null && y1 !== null) return { x: Math.max(60, x1), y: y1 - 48 };
+    }
+    if (drawing.points.length === 1) {
+      const x1 = timeScale.timeToCoordinate(drawing.points[0].time as any);
+      const y1 = series.priceToCoordinate(drawing.points[0].price);
+      if (x1 !== null && y1 !== null) return { x: Math.max(60, x1), y: y1 - 48 };
     }
     if ((drawing.type === 'position_long' || drawing.type === 'position_short') && drawing.entryPrice != null) {
       const y = series.priceToCoordinate(drawing.entryPrice);
       const x1 = drawing.points[0] ? timeScale.timeToCoordinate(drawing.points[0].time as any) : 100;
-      return y !== null && x1 !== null ? { x: x1, y: y - 44 } : null;
+      return y !== null && x1 !== null ? { x: Math.max(60, x1), y: y - 48 } : null;
     }
     return null;
   }, [chart, series]);
@@ -181,7 +205,6 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     setContextMenu(null);
 
     if (!activeTool) {
-      // Selection mode
       if (!containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
       const mx = e.clientX - rect.left;
@@ -196,6 +219,8 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
       return;
     }
 
+    if (activeTool === 'brush') return; // handled by mousedown/up
+
     const rawPoint = getBarAndPrice(e);
     if (!rawPoint) return;
     const point = { ...rawPoint, price: snapPrice(rawPoint.price) };
@@ -207,35 +232,78 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
         type: activeTool,
         points: [point],
         color: DEFAULT_COLORS[activeTool],
-        lineWidth: activeTool === 'horizontal' ? 1 : 1,
+        lineWidth: activeTool === 'horizontal' ? 1 : 2,
         lineStyle: activeTool === 'horizontal' ? 'dashed' : 'solid',
+        text: activeTool === 'text' ? 'Note' : undefined,
+        showLabel: true,
       };
       onDrawingsChange([...drawings, drawing]);
+      if (activeTool === 'text') {
+        setSelectedDrawingId(drawing.id);
+      }
       pendingPointsRef.current = [];
     } else if (needed === 3) {
       const pts = [...pendingPointsRef.current, point];
       if (pts.length < 3) {
         pendingPointsRef.current = pts;
       } else {
-        const entry = pts[0].price;
-        const sl = pts[1].price;
-        const tp = pts[2].price;
-        const risk = Math.abs(entry - sl);
-        const reward = Math.abs(tp - entry);
-        const rr = risk > 0 ? reward / risk : 0;
-        const drawing: Drawing = {
-          id: createDrawingId(),
-          type: activeTool,
-          points: pts,
-          color: DEFAULT_COLORS[activeTool],
-          lineWidth: 1,
-          lineStyle: 'solid',
-          entryPrice: entry,
-          stopLoss: sl,
-          takeProfit: tp,
-          riskRewardRatio: rr,
-        };
-        onDrawingsChange([...drawings, drawing]);
+        if (activeTool === 'position_long' || activeTool === 'position_short') {
+          const entry = pts[0].price;
+          const sl = pts[1].price;
+          const tp = pts[2].price;
+          const risk = Math.abs(entry - sl);
+          const reward = Math.abs(tp - entry);
+          const rr = risk > 0 ? reward / risk : 0;
+          const drawing: Drawing = {
+            id: createDrawingId(),
+            type: activeTool,
+            points: pts,
+            color: DEFAULT_COLORS[activeTool],
+            lineWidth: 1,
+            lineStyle: 'solid',
+            entryPrice: entry,
+            stopLoss: sl,
+            takeProfit: tp,
+            riskRewardRatio: rr,
+            showLabel: true,
+          };
+          onDrawingsChange([...drawings, drawing]);
+        } else if (activeTool === 'triangle') {
+          const drawing: Drawing = {
+            id: createDrawingId(),
+            type: activeTool,
+            points: pts,
+            color: DEFAULT_COLORS[activeTool],
+            lineWidth: 2,
+            lineStyle: 'solid',
+            fillOpacity: 0.1,
+            showLabel: true,
+          };
+          onDrawingsChange([...drawings, drawing]);
+        } else if (activeTool === 'pitchfork') {
+          const drawing: Drawing = {
+            id: createDrawingId(),
+            type: activeTool,
+            points: pts,
+            color: DEFAULT_COLORS[activeTool],
+            lineWidth: 2,
+            lineStyle: 'solid',
+            showLabel: true,
+          };
+          onDrawingsChange([...drawings, drawing]);
+        } else if (activeTool === 'fib_extension') {
+          const drawing: Drawing = {
+            id: createDrawingId(),
+            type: activeTool,
+            points: pts,
+            color: DEFAULT_COLORS[activeTool],
+            lineWidth: 1,
+            lineStyle: 'solid',
+            fibLevels: DEFAULT_FIB_EXT_LEVELS,
+            showLabel: true,
+          };
+          onDrawingsChange([...drawings, drawing]);
+        }
         pendingPointsRef.current = [];
       }
     } else {
@@ -250,6 +318,8 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
           lineWidth: 2,
           lineStyle: 'solid',
           ...(activeTool === 'fibonacci' ? { fibLevels: DEFAULT_FIB_LEVELS } : {}),
+          fillOpacity: activeTool === 'ellipse' ? 0.1 : undefined,
+          showLabel: true,
         };
         onDrawingsChange([...drawings, drawing]);
         pendingPointsRef.current = [];
@@ -257,13 +327,19 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     }
   }, [activeTool, drawings, onDrawingsChange, getBarAndPrice, snapPrice, hitTestDrawing, containerRef]);
 
-  // Mouse move - hover detection + drag
+  // Mouse move
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
     mouseRef.current = { x: mx, y: my };
+
+    // Brush drawing
+    if (isBrushing.current && activeTool === 'brush') {
+      brushPointsRef.current.push({ x: mx, y: my });
+      return;
+    }
 
     // Drag in progress
     if (dragState && chart && series) {
@@ -275,7 +351,6 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
       if (!d) return;
 
       if (dragState.anchor === 'body') {
-        // Move all points by delta
         const dp = snapPrice(priceCoord) - snapPrice(dragState.originalPoints[0].price);
         const dt = (timeCoord as number) - dragState.originalPoints[0].time;
         const newPoints = dragState.originalPoints.map(p => ({
@@ -293,15 +368,22 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
       return;
     }
 
-    // Hover detection when no tool active
     if (!activeTool) {
       const hit = hitTestDrawing(mx, my);
       setHoveredDrawingId(hit?.id || null);
     }
   }, [containerRef, activeTool, hitTestDrawing, dragState, chart, series, drawings, onDrawingsChange, snapPrice]);
 
-  // Mouse down - start drag
+  // Mouse down - start drag or brush
   const handleMouseDown = useCallback((e: MouseEvent) => {
+    if (activeTool === 'brush' && e.button === 0 && containerRef.current) {
+      isBrushing.current = true;
+      const rect = containerRef.current.getBoundingClientRect();
+      brushPointsRef.current = [{ x: e.clientX - rect.left, y: e.clientY - rect.top }];
+      e.preventDefault();
+      return;
+    }
+
     if (activeTool || e.button !== 0) return;
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -322,7 +404,23 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
 
   const handleMouseUp = useCallback(() => {
     if (dragState) setDragState(null);
-  }, [dragState]);
+
+    // Finish brush stroke
+    if (isBrushing.current && activeTool === 'brush' && brushPointsRef.current.length > 2) {
+      const drawing: Drawing = {
+        id: createDrawingId(),
+        type: 'brush',
+        points: [], // brush uses brushPoints instead
+        color: DEFAULT_COLORS.brush,
+        lineWidth: 2,
+        lineStyle: 'solid',
+        brushPoints: [...brushPointsRef.current],
+      };
+      onDrawingsChange([...drawings, drawing]);
+    }
+    isBrushing.current = false;
+    brushPointsRef.current = [];
+  }, [dragState, activeTool, drawings, onDrawingsChange]);
 
   // Right-click context menu
   const handleContextMenu = useCallback((e: MouseEvent) => {
@@ -343,7 +441,7 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     }
   }, [activeTool, hitTestDrawing, containerRef]);
 
-  // Keyboard: Delete/Backspace to remove selected drawing
+  // Keyboard: Delete/Backspace
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -352,6 +450,11 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
         onDrawingsChange(drawings.filter(d => d.id !== selectedDrawingId));
         setSelectedDrawingId(null);
         setToolbarPos(null);
+      }
+      // Ctrl+Z undo last drawing
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && drawings.length > 0) {
+        e.preventDefault();
+        onDrawingsChange(drawings.slice(0, -1));
       }
     };
     window.addEventListener('keydown', handler);
@@ -379,7 +482,7 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     };
   }, [handleClick, handleMouseMove, handleMouseDown, handleMouseUp, handleContextMenu, containerRef]);
 
-  // Update toolbar position when selection/chart changes
+  // Update toolbar position
   useEffect(() => {
     if (selectedDrawing) {
       const pos = computeToolbarPos(selectedDrawing);
@@ -409,130 +512,83 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
       const timeScale = chart.timeScale();
 
       for (const drawing of drawings) {
+        if (drawing.visible === false) continue;
         const isSelected = drawing.id === selectedDrawingId;
         const isHovered = drawing.id === hoveredDrawingId;
+        const alpha = drawing.opacity ?? 1;
+
         ctx.strokeStyle = drawing.color;
         ctx.fillStyle = drawing.color;
         ctx.lineWidth = drawing.lineWidth;
+        ctx.globalAlpha = alpha;
         setLineDash(ctx, drawing.lineStyle);
 
         if (isSelected) {
           ctx.lineWidth = drawing.lineWidth + 1;
           ctx.shadowColor = drawing.color;
-          ctx.shadowBlur = 10;
+          ctx.shadowBlur = 12;
         } else if (isHovered) {
           ctx.lineWidth = drawing.lineWidth + 0.5;
           ctx.shadowColor = drawing.color;
-          ctx.shadowBlur = 4;
+          ctx.shadowBlur = 6;
         }
 
-        if (drawing.locked) ctx.globalAlpha = 0.5;
+        if (drawing.locked) ctx.globalAlpha = alpha * 0.5;
 
         // --- Draw each type ---
         if (drawing.type === 'horizontal' && drawing.points[0]) {
-          const y = series.priceToCoordinate(drawing.points[0].price);
-          if (y !== null) {
-            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.font = '10px JetBrains Mono, monospace';
-            const text = drawing.label || drawing.points[0].price.toFixed(4);
-            const tw = ctx.measureText(text).width;
-            const lx = width - tw - 16;
-            ctx.fillStyle = drawing.color + '25';
-            ctx.beginPath(); ctx.roundRect(lx, y - 10, tw + 12, 20, 3); ctx.fill();
-            ctx.fillStyle = drawing.color;
-            ctx.fillText(text, lx + 6, y + 4);
-            if (isSelected) {
-              ctx.setLineDash([]);
-              ctx.fillStyle = '#fff';
-              ctx.beginPath(); ctx.arc(40, y, 4, 0, Math.PI * 2); ctx.fill();
-              ctx.strokeStyle = drawing.color; ctx.lineWidth = 1.5;
-              ctx.beginPath(); ctx.arc(40, y, 4, 0, Math.PI * 2); ctx.stroke();
-              ctx.beginPath(); ctx.arc(width - 40, y, 4, 0, Math.PI * 2); ctx.fill();
-              ctx.strokeStyle = drawing.color;
-              ctx.beginPath(); ctx.arc(width - 40, y, 4, 0, Math.PI * 2); ctx.stroke();
-            }
-          }
+          renderHorizontal(ctx, drawing, series, width, isSelected);
         } else if (drawing.type === 'vertical' && drawing.points[0]) {
-          const x = timeScale.timeToCoordinate(drawing.points[0].time as any);
-          if (x !== null) {
-            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
-            if (isSelected) {
-              ctx.setLineDash([]);
-              ctx.fillStyle = '#fff';
-              ctx.beginPath(); ctx.arc(x, 40, 4, 0, Math.PI * 2); ctx.fill();
-              ctx.strokeStyle = drawing.color; ctx.lineWidth = 1.5;
-              ctx.beginPath(); ctx.arc(x, 40, 4, 0, Math.PI * 2); ctx.stroke();
-            }
-          }
+          renderVertical(ctx, drawing, timeScale, height, isSelected);
         } else if (drawing.type === 'trendline' && drawing.points.length === 2) {
-          const x1 = timeScale.timeToCoordinate(drawing.points[0].time as any);
-          const y1 = series.priceToCoordinate(drawing.points[0].price);
-          const x2 = timeScale.timeToCoordinate(drawing.points[1].time as any);
-          const y2 = series.priceToCoordinate(drawing.points[1].price);
-          if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
-            ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-            const angle = Math.atan2(y2 - y1, x2 - x1) * (180 / Math.PI);
-            ctx.setLineDash([]);
-            ctx.font = '9px JetBrains Mono, monospace';
-            ctx.fillStyle = drawing.color + '90';
-            ctx.fillText(`${angle.toFixed(1)}°`, (x1 + x2) / 2 + 6, (y1 + y2) / 2 - 6);
-            // Anchor dots (TradingView style - white fill, colored border)
-            drawAnchor(ctx, x1, y1, drawing.color, isSelected);
-            drawAnchor(ctx, x2, y2, drawing.color, isSelected);
-            if (isSelected) {
-              drawAnchor(ctx, (x1 + x2) / 2, (y1 + y2) / 2, drawing.color, true); // midpoint
-            }
-          }
+          renderTrendline(ctx, drawing, series, timeScale, isSelected, width);
         } else if (drawing.type === 'ray' && drawing.points.length === 2) {
-          const x1 = timeScale.timeToCoordinate(drawing.points[0].time as any);
-          const y1 = series.priceToCoordinate(drawing.points[0].price);
-          const x2 = timeScale.timeToCoordinate(drawing.points[1].time as any);
-          const y2 = series.priceToCoordinate(drawing.points[1].price);
-          if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
-            const dx = x2 - x1, dy = y2 - y1;
-            const extX = dx > 0 ? width + 100 : -100;
-            const t = dx !== 0 ? (extX - x1) / dx : 10;
-            const extY = y1 + dy * t;
-            ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(extX, extY); ctx.stroke();
-            drawAnchor(ctx, x1, y1, drawing.color, isSelected);
-            drawAnchor(ctx, x2, y2, drawing.color, isSelected);
-          }
+          renderRay(ctx, drawing, series, timeScale, isSelected, width);
+        } else if (drawing.type === 'extended_line' && drawing.points.length === 2) {
+          renderExtendedLine(ctx, drawing, series, timeScale, isSelected, width);
+        } else if (drawing.type === 'info_line' && drawing.points.length === 2) {
+          renderInfoLine(ctx, drawing, series, timeScale, isSelected);
         } else if (drawing.type === 'rectangle' && drawing.points.length === 2) {
-          const x1 = timeScale.timeToCoordinate(drawing.points[0].time as any);
-          const y1 = series.priceToCoordinate(drawing.points[0].price);
-          const x2 = timeScale.timeToCoordinate(drawing.points[1].time as any);
-          const y2 = series.priceToCoordinate(drawing.points[1].price);
-          if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
-            const rx = Math.min(x1, x2), ry = Math.min(y1, y2);
-            const rw = Math.abs(x2 - x1), rh = Math.abs(y2 - y1);
-            ctx.globalAlpha = drawing.locked ? 0.06 : 0.1;
-            ctx.fillRect(rx, ry, rw, rh);
-            ctx.globalAlpha = drawing.locked ? 0.4 : 0.8;
-            ctx.strokeRect(rx, ry, rw, rh);
-            ctx.globalAlpha = 1;
-            if (isSelected) {
-              const priceDiff = Math.abs(drawing.points[1].price - drawing.points[0].price);
-              ctx.setLineDash([]);
-              ctx.font = '9px JetBrains Mono, monospace';
-              ctx.fillStyle = drawing.color + '90';
-              ctx.fillText(`Δ ${priceDiff.toFixed(4)}`, rx + 4, ry + 12);
-              drawAnchor(ctx, x1, y1, drawing.color, true);
-              drawAnchor(ctx, x2, y2, drawing.color, true);
-              drawAnchor(ctx, x1, y2, drawing.color, true);
-              drawAnchor(ctx, x2, y1, drawing.color, true);
-            }
-          }
+          renderRectangle(ctx, drawing, series, timeScale, isSelected);
+        } else if (drawing.type === 'ellipse' && drawing.points.length === 2) {
+          renderEllipse(ctx, drawing, series, timeScale, isSelected);
+        } else if (drawing.type === 'triangle' && drawing.points.length === 3) {
+          renderTriangle(ctx, drawing, series, timeScale, isSelected);
         } else if (drawing.type === 'fibonacci' && drawing.points.length === 2) {
           renderFibonacci(ctx, drawing, series, timeScale, width, isSelected);
+        } else if (drawing.type === 'fib_extension' && drawing.points.length === 3) {
+          renderFibExtension(ctx, drawing, series, timeScale, width, isSelected);
+        } else if (drawing.type === 'pitchfork' && drawing.points.length === 3) {
+          renderPitchfork(ctx, drawing, series, timeScale, isSelected, width);
         } else if ((drawing.type === 'position_long' || drawing.type === 'position_short') && drawing.points.length >= 3) {
           renderPosition(ctx, drawing, series, timeScale, width, isSelected);
+        } else if (drawing.type === 'measure' && drawing.points.length === 2) {
+          renderMeasure(ctx, drawing, series, timeScale, isSelected);
+        } else if (drawing.type === 'price_range' && drawing.points.length === 2) {
+          renderPriceRange(ctx, drawing, series, timeScale, isSelected);
+        } else if (drawing.type === 'text' && drawing.points[0]) {
+          renderText(ctx, drawing, series, timeScale, isSelected);
+        } else if (drawing.type === 'brush' && drawing.brushPoints && drawing.brushPoints.length > 1) {
+          renderBrush(ctx, drawing);
         }
 
         ctx.shadowBlur = 0;
         ctx.shadowColor = 'transparent';
         ctx.globalAlpha = 1;
         ctx.setLineDash([]);
+      }
+
+      // Brush in progress
+      if (isBrushing.current && brushPointsRef.current.length > 1) {
+        ctx.strokeStyle = DEFAULT_COLORS.brush;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(brushPointsRef.current[0].x, brushPointsRef.current[0].y);
+        for (let i = 1; i < brushPointsRef.current.length; i++) {
+          ctx.lineTo(brushPointsRef.current[i].x, brushPointsRef.current[i].y);
+        }
+        ctx.stroke();
       }
 
       // Pending preview
@@ -545,49 +601,240 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     return () => { clearInterval(interval); };
   }, [chart, series, drawings, activeTool, containerRef, selectedDrawingId, hoveredDrawingId, snapPrice]);
 
-  // --- Helper render functions ---
+  // --- Render helpers ---
 
   function drawAnchor(ctx: CanvasRenderingContext2D, x: number, y: number, color: string, show: boolean) {
     if (!show) return;
     ctx.setLineDash([]);
+    ctx.fillStyle = '#1a1510';
+    ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = color;
     ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.stroke();
   }
 
-  function renderFibonacci(ctx: CanvasRenderingContext2D, drawing: Drawing, series: any, timeScale: any, width: number, isSelected: boolean) {
-    const x1 = timeScale.timeToCoordinate(drawing.points[0].time as any);
-    const y1 = series.priceToCoordinate(drawing.points[0].price);
-    const x2 = timeScale.timeToCoordinate(drawing.points[1].time as any);
-    const y2 = series.priceToCoordinate(drawing.points[1].price);
+  function renderHorizontal(ctx: CanvasRenderingContext2D, d: Drawing, series: any, width: number, isSelected: boolean) {
+    const y = series.priceToCoordinate(d.points[0].price);
+    if (y === null) return;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke();
+    ctx.setLineDash([]);
+    if (d.showLabel !== false) {
+      ctx.font = '10px JetBrains Mono, monospace';
+      const text = d.label || d.points[0].price.toFixed(4);
+      const tw = ctx.measureText(text).width;
+      const lx = width - tw - 16;
+      ctx.fillStyle = d.color + '25';
+      ctx.beginPath(); ctx.roundRect(lx, y - 10, tw + 12, 20, 3); ctx.fill();
+      ctx.fillStyle = d.color;
+      ctx.fillText(text, lx + 6, y + 4);
+    }
+    if (isSelected) {
+      drawAnchor(ctx, 60, y, d.color, true);
+      drawAnchor(ctx, width - 60, y, d.color, true);
+    }
+  }
+
+  function renderVertical(ctx: CanvasRenderingContext2D, d: Drawing, timeScale: any, height: number, isSelected: boolean) {
+    const x = timeScale.timeToCoordinate(d.points[0].time as any);
+    if (x === null) return;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
+    if (isSelected) {
+      drawAnchor(ctx, x, 40, d.color, true);
+      drawAnchor(ctx, x, height - 40, d.color, true);
+    }
+  }
+
+  function renderTrendline(ctx: CanvasRenderingContext2D, d: Drawing, series: any, timeScale: any, isSelected: boolean, width: number) {
+    const x1 = timeScale.timeToCoordinate(d.points[0].time as any);
+    const y1 = series.priceToCoordinate(d.points[0].price);
+    const x2 = timeScale.timeToCoordinate(d.points[1].time as any);
+    const y2 = series.priceToCoordinate(d.points[1].price);
     if (x1 === null || y1 === null || x2 === null || y2 === null) return;
-    const levels = drawing.fibLevels || DEFAULT_FIB_LEVELS;
-    const priceDiff = drawing.points[1].price - drawing.points[0].price;
+
+    let sx = x1, sy = y1, ex = x2, ey = y2;
+    const dx = x2 - x1, dy = y2 - y1;
+
+    if (d.extendLeft && dx !== 0) {
+      const t = (0 - x1) / dx;
+      sx = 0; sy = y1 + dy * t;
+    }
+    if (d.extendRight && dx !== 0) {
+      const t = (width - x1) / dx;
+      ex = width; ey = y1 + dy * t;
+    }
+
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+
+    if (d.showLabel !== false) {
+      const angle = Math.atan2(y2 - y1, x2 - x1) * (180 / Math.PI);
+      ctx.setLineDash([]);
+      ctx.font = '9px JetBrains Mono, monospace';
+      ctx.fillStyle = d.color + '90';
+      ctx.fillText(`${angle.toFixed(1)}°`, (x1 + x2) / 2 + 6, (y1 + y2) / 2 - 6);
+    }
+
+    drawAnchor(ctx, x1, y1, d.color, isSelected);
+    drawAnchor(ctx, x2, y2, d.color, isSelected);
+    if (isSelected) drawAnchor(ctx, (x1 + x2) / 2, (y1 + y2) / 2, d.color, true);
+  }
+
+  function renderRay(ctx: CanvasRenderingContext2D, d: Drawing, series: any, timeScale: any, isSelected: boolean, width: number) {
+    const x1 = timeScale.timeToCoordinate(d.points[0].time as any);
+    const y1 = series.priceToCoordinate(d.points[0].price);
+    const x2 = timeScale.timeToCoordinate(d.points[1].time as any);
+    const y2 = series.priceToCoordinate(d.points[1].price);
+    if (x1 === null || y1 === null || x2 === null || y2 === null) return;
+    const dx = x2 - x1, dy = y2 - y1;
+    const extX = dx > 0 ? width + 100 : -100;
+    const t = dx !== 0 ? (extX - x1) / dx : 10;
+    const extY = y1 + dy * t;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(extX, extY); ctx.stroke();
+    drawAnchor(ctx, x1, y1, d.color, isSelected);
+    drawAnchor(ctx, x2, y2, d.color, isSelected);
+  }
+
+  function renderExtendedLine(ctx: CanvasRenderingContext2D, d: Drawing, series: any, timeScale: any, isSelected: boolean, width: number) {
+    const x1 = timeScale.timeToCoordinate(d.points[0].time as any);
+    const y1 = series.priceToCoordinate(d.points[0].price);
+    const x2 = timeScale.timeToCoordinate(d.points[1].time as any);
+    const y2 = series.priceToCoordinate(d.points[1].price);
+    if (x1 === null || y1 === null || x2 === null || y2 === null) return;
+    const dx = x2 - x1, dy = y2 - y1;
+    if (dx === 0 && dy === 0) return;
+    const tLeft = dx !== 0 ? (-100 - x1) / dx : -10;
+    const tRight = dx !== 0 ? (width + 100 - x1) / dx : 10;
+    ctx.beginPath();
+    ctx.moveTo(x1 + dx * Math.min(tLeft, tRight), y1 + dy * Math.min(tLeft, tRight));
+    ctx.lineTo(x1 + dx * Math.max(tLeft, tRight), y1 + dy * Math.max(tLeft, tRight));
+    ctx.stroke();
+    drawAnchor(ctx, x1, y1, d.color, isSelected);
+    drawAnchor(ctx, x2, y2, d.color, isSelected);
+  }
+
+  function renderInfoLine(ctx: CanvasRenderingContext2D, d: Drawing, series: any, timeScale: any, isSelected: boolean) {
+    const x1 = timeScale.timeToCoordinate(d.points[0].time as any);
+    const y1 = series.priceToCoordinate(d.points[0].price);
+    const x2 = timeScale.timeToCoordinate(d.points[1].time as any);
+    const y2 = series.priceToCoordinate(d.points[1].price);
+    if (x1 === null || y1 === null || x2 === null || y2 === null) return;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+
+    // Info display
+    const priceDiff = d.points[1].price - d.points[0].price;
+    const timeDiff = d.points[1].time - d.points[0].time;
+    const bars = Math.round(timeDiff / 60);
+    const pips = Math.abs(priceDiff) * (d.points[0].price > 10 ? 100 : 10000);
+
+    ctx.setLineDash([]);
+    ctx.font = '10px JetBrains Mono, monospace';
+    const midX = (x1 + x2) / 2;
+    const midY = (y1 + y2) / 2;
+    const infoText = `${priceDiff >= 0 ? '+' : ''}${priceDiff.toFixed(5)} (${pips.toFixed(0)}p) | ${bars} bars`;
+    const tw = ctx.measureText(infoText).width;
+
+    ctx.fillStyle = '#1a1510e0';
+    ctx.beginPath(); ctx.roundRect(midX - tw / 2 - 6, midY - 20, tw + 12, 18, 4); ctx.fill();
+    ctx.fillStyle = d.color;
+    ctx.fillText(infoText, midX - tw / 2, midY - 8);
+
+    drawAnchor(ctx, x1, y1, d.color, isSelected);
+    drawAnchor(ctx, x2, y2, d.color, isSelected);
+  }
+
+  function renderRectangle(ctx: CanvasRenderingContext2D, d: Drawing, series: any, timeScale: any, isSelected: boolean) {
+    const x1 = timeScale.timeToCoordinate(d.points[0].time as any);
+    const y1 = series.priceToCoordinate(d.points[0].price);
+    const x2 = timeScale.timeToCoordinate(d.points[1].time as any);
+    const y2 = series.priceToCoordinate(d.points[1].price);
+    if (x1 === null || y1 === null || x2 === null || y2 === null) return;
+    const rx = Math.min(x1, x2), ry = Math.min(y1, y2);
+    const rw = Math.abs(x2 - x1), rh = Math.abs(y2 - y1);
+    ctx.globalAlpha = (d.fillOpacity ?? 0.1) * (d.opacity ?? 1);
+    ctx.fillStyle = d.fillColor || d.color;
+    ctx.fillRect(rx, ry, rw, rh);
+    ctx.globalAlpha = d.opacity ?? 1;
+    ctx.strokeRect(rx, ry, rw, rh);
+    if (isSelected) {
+      drawAnchor(ctx, x1, y1, d.color, true);
+      drawAnchor(ctx, x2, y2, d.color, true);
+      drawAnchor(ctx, x1, y2, d.color, true);
+      drawAnchor(ctx, x2, y1, d.color, true);
+    }
+  }
+
+  function renderEllipse(ctx: CanvasRenderingContext2D, d: Drawing, series: any, timeScale: any, isSelected: boolean) {
+    const x1 = timeScale.timeToCoordinate(d.points[0].time as any);
+    const y1 = series.priceToCoordinate(d.points[0].price);
+    const x2 = timeScale.timeToCoordinate(d.points[1].time as any);
+    const y2 = series.priceToCoordinate(d.points[1].price);
+    if (x1 === null || y1 === null || x2 === null || y2 === null) return;
+    const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+    const rx = Math.abs(x2 - x1) / 2, ry = Math.abs(y2 - y1) / 2;
+    ctx.globalAlpha = (d.fillOpacity ?? 0.1) * (d.opacity ?? 1);
+    ctx.fillStyle = d.fillColor || d.color;
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = d.opacity ?? 1;
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); ctx.stroke();
+    if (isSelected) {
+      drawAnchor(ctx, x1, y1, d.color, true);
+      drawAnchor(ctx, x2, y2, d.color, true);
+    }
+  }
+
+  function renderTriangle(ctx: CanvasRenderingContext2D, d: Drawing, series: any, timeScale: any, isSelected: boolean) {
+    const coords = d.points.map(p => ({
+      x: timeScale.timeToCoordinate(p.time as any),
+      y: series.priceToCoordinate(p.price),
+    }));
+    if (coords.some(c => c.x === null || c.y === null)) return;
+    ctx.globalAlpha = (d.fillOpacity ?? 0.1) * (d.opacity ?? 1);
+    ctx.fillStyle = d.fillColor || d.color;
+    ctx.beginPath();
+    ctx.moveTo(coords[0].x!, coords[0].y!);
+    ctx.lineTo(coords[1].x!, coords[1].y!);
+    ctx.lineTo(coords[2].x!, coords[2].y!);
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = d.opacity ?? 1;
+    ctx.stroke();
+    if (isSelected) {
+      coords.forEach(c => drawAnchor(ctx, c.x!, c.y!, d.color, true));
+    }
+  }
+
+  function renderFibonacci(ctx: CanvasRenderingContext2D, d: Drawing, series: any, timeScale: any, width: number, isSelected: boolean) {
+    const x1 = timeScale.timeToCoordinate(d.points[0].time as any);
+    const y1 = series.priceToCoordinate(d.points[0].price);
+    const x2 = timeScale.timeToCoordinate(d.points[1].time as any);
+    const y2 = series.priceToCoordinate(d.points[1].price);
+    if (x1 === null || y1 === null || x2 === null || y2 === null) return;
+    const levels = d.fibLevels || DEFAULT_FIB_LEVELS;
+    const priceDiff = d.points[1].price - d.points[0].price;
     ctx.font = '10px JetBrains Mono, monospace';
     const fibColors = ['#d4a54a', '#c47d2e', '#a0855c', '#8b6914', '#d4a54a', '#c47d2e', '#a0855c'];
     for (let i = 0; i < levels.length; i++) {
       const level = levels[i];
-      const price = drawing.points[0].price + priceDiff * level;
+      const price = d.points[0].price + priceDiff * level;
       const y = series.priceToCoordinate(price);
       if (y !== null) {
         ctx.strokeStyle = fibColors[i % fibColors.length];
-        ctx.globalAlpha = 0.6;
+        ctx.globalAlpha = 0.6 * (d.opacity ?? 1);
         ctx.setLineDash(level === 0 || level === 1 ? [] : [4, 4]);
         ctx.beginPath();
         ctx.moveTo(Math.min(x1, x2), y);
         ctx.lineTo(Math.max(x1, x2) + 60, y);
         ctx.stroke();
-        ctx.globalAlpha = 1;
+        ctx.globalAlpha = d.opacity ?? 1;
         ctx.setLineDash([]);
         ctx.fillStyle = fibColors[i % fibColors.length];
         ctx.fillText(`${(level * 100).toFixed(1)}% — ${price.toFixed(4)}`, Math.max(x1, x2) + 8, y + 4);
       }
     }
     for (let i = 0; i < levels.length - 1; i++) {
-      const p1 = drawing.points[0].price + priceDiff * levels[i];
-      const p2 = drawing.points[0].price + priceDiff * levels[i + 1];
+      const p1 = d.points[0].price + priceDiff * levels[i];
+      const p2 = d.points[0].price + priceDiff * levels[i + 1];
       const cy1 = series.priceToCoordinate(p1);
       const cy2 = series.priceToCoordinate(p2);
       if (cy1 !== null && cy2 !== null) {
@@ -598,25 +845,123 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
       }
     }
     if (isSelected) {
-      drawAnchor(ctx, x1, y1, drawing.color, true);
-      drawAnchor(ctx, x2, y2, drawing.color, true);
+      drawAnchor(ctx, x1, y1, d.color, true);
+      drawAnchor(ctx, x2, y2, d.color, true);
     }
   }
 
-  function renderPosition(ctx: CanvasRenderingContext2D, drawing: Drawing, series: any, timeScale: any, width: number, isSelected: boolean) {
-    const entryPrice = drawing.entryPrice!;
-    const slPrice = drawing.stopLoss!;
-    const tpPrice = drawing.takeProfit!;
-    const isLong = drawing.type === 'position_long';
+  function renderFibExtension(ctx: CanvasRenderingContext2D, d: Drawing, series: any, timeScale: any, width: number, isSelected: boolean) {
+    if (d.points.length < 3) return;
+    const coords = d.points.map(p => ({
+      x: timeScale.timeToCoordinate(p.time as any),
+      y: series.priceToCoordinate(p.price),
+    }));
+    if (coords.some(c => c.x === null || c.y === null)) return;
+
+    // Draw the ABC segments
+    ctx.strokeStyle = d.color;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(coords[0].x!, coords[0].y!);
+    ctx.lineTo(coords[1].x!, coords[1].y!);
+    ctx.lineTo(coords[2].x!, coords[2].y!);
+    ctx.stroke();
+
+    // Extension levels from point C
+    const levels = d.fibLevels || DEFAULT_FIB_EXT_LEVELS;
+    const priceDiff = d.points[1].price - d.points[0].price;
+    ctx.font = '10px JetBrains Mono, monospace';
+    const fibColors = ['#d4a54a', '#c47d2e', '#a0855c', '#8b6914', '#d4a54a', '#c47d2e', '#a0855c'];
+
+    for (let i = 0; i < levels.length; i++) {
+      const price = d.points[2].price + priceDiff * levels[i];
+      const y = series.priceToCoordinate(price);
+      if (y !== null) {
+        ctx.strokeStyle = fibColors[i % fibColors.length];
+        ctx.globalAlpha = 0.5;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(coords[2].x!, y);
+        ctx.lineTo(coords[2].x! + 300, y);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        ctx.setLineDash([]);
+        ctx.fillStyle = fibColors[i % fibColors.length];
+        ctx.fillText(`${(levels[i] * 100).toFixed(1)}% — ${price.toFixed(4)}`, coords[2].x! + 310, y + 4);
+      }
+    }
+
+    if (isSelected) {
+      coords.forEach(c => drawAnchor(ctx, c.x!, c.y!, d.color, true));
+    }
+  }
+
+  function renderPitchfork(ctx: CanvasRenderingContext2D, d: Drawing, series: any, timeScale: any, isSelected: boolean, width: number) {
+    if (d.points.length < 3) return;
+    const coords = d.points.map(p => ({
+      x: timeScale.timeToCoordinate(p.time as any) as number,
+      y: series.priceToCoordinate(p.price) as number,
+    }));
+    if (coords.some(c => c.x === null || c.y === null)) return;
+
+    // Median point between B and C
+    const midX = (coords[1].x + coords[2].x) / 2;
+    const midY = (coords[1].y + coords[2].y) / 2;
+
+    // Median line from A through midpoint
+    const dx = midX - coords[0].x;
+    const dy = midY - coords[0].y;
+    const t = dx !== 0 ? (width - coords[0].x) / dx : 5;
+    const extX = coords[0].x + dx * t;
+    const extY = coords[0].y + dy * t;
+
+    ctx.beginPath(); ctx.moveTo(coords[0].x, coords[0].y); ctx.lineTo(extX, extY); ctx.stroke();
+
+    // Upper and lower prongs
+    const halfW = Math.hypot(coords[2].x - coords[1].x, coords[2].y - coords[1].y) / 2;
+    const perpX = -(coords[2].y - coords[1].y) / (halfW * 2) * halfW;
+    const perpY = (coords[2].x - coords[1].x) / (halfW * 2) * halfW;
+
+    ctx.setLineDash([4, 4]);
+    ctx.globalAlpha = 0.5;
+    // Upper
+    ctx.beginPath();
+    ctx.moveTo(coords[1].x, coords[1].y);
+    ctx.lineTo(coords[1].x + dx * t, coords[1].y + dy * t);
+    ctx.stroke();
+    // Lower
+    ctx.beginPath();
+    ctx.moveTo(coords[2].x, coords[2].y);
+    ctx.lineTo(coords[2].x + dx * t, coords[2].y + dy * t);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+
+    // Connect B-C
+    ctx.beginPath();
+    ctx.moveTo(coords[1].x, coords[1].y);
+    ctx.lineTo(coords[2].x, coords[2].y);
+    ctx.stroke();
+
+    if (isSelected) {
+      coords.forEach(c => drawAnchor(ctx, c.x, c.y, d.color, true));
+    }
+  }
+
+  function renderPosition(ctx: CanvasRenderingContext2D, d: Drawing, series: any, timeScale: any, width: number, isSelected: boolean) {
+    const entryPrice = d.entryPrice!;
+    const slPrice = d.stopLoss!;
+    const tpPrice = d.takeProfit!;
+    const isLong = d.type === 'position_long';
     const entryY = series.priceToCoordinate(entryPrice);
     const slY = series.priceToCoordinate(slPrice);
     const tpY = series.priceToCoordinate(tpPrice);
-    const x1 = timeScale.timeToCoordinate(drawing.points[0].time as any);
+    const x1 = timeScale.timeToCoordinate(d.points[0].time as any);
     if (entryY === null || slY === null || tpY === null || x1 === null) return;
 
     const boxWidth = 280;
 
-    // TP zone
+    // TP zone gradient
     const tpGrad = ctx.createLinearGradient(x1, Math.min(entryY, tpY), x1, Math.max(entryY, tpY));
     tpGrad.addColorStop(0, NUBIAN_LONG + '18');
     tpGrad.addColorStop(1, NUBIAN_LONG + '05');
@@ -627,7 +972,7 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     ctx.setLineDash([5, 3]);
     ctx.beginPath(); ctx.moveTo(x1, tpY); ctx.lineTo(x1 + boxWidth, tpY); ctx.stroke();
 
-    // SL zone
+    // SL zone gradient
     const slGrad = ctx.createLinearGradient(x1, Math.min(entryY, slY), x1, Math.max(entryY, slY));
     slGrad.addColorStop(0, NUBIAN_SHORT + '05');
     slGrad.addColorStop(1, NUBIAN_SHORT + '18');
@@ -643,26 +988,23 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(x1, entryY); ctx.lineTo(x1 + boxWidth, entryY); ctx.stroke();
 
-    // Direction indicator
+    // Direction arrow
     ctx.fillStyle = isLong ? NUBIAN_LONG : NUBIAN_SHORT;
     const arrowX = x1 + boxWidth - 20;
     ctx.beginPath();
     if (isLong) {
-      ctx.moveTo(arrowX, entryY - 15);
-      ctx.lineTo(arrowX - 6, entryY - 5);
-      ctx.lineTo(arrowX + 6, entryY - 5);
+      ctx.moveTo(arrowX, entryY - 15); ctx.lineTo(arrowX - 6, entryY - 5); ctx.lineTo(arrowX + 6, entryY - 5);
     } else {
-      ctx.moveTo(arrowX, entryY + 15);
-      ctx.lineTo(arrowX - 6, entryY + 5);
-      ctx.lineTo(arrowX + 6, entryY + 5);
+      ctx.moveTo(arrowX, entryY + 15); ctx.lineTo(arrowX - 6, entryY + 5); ctx.lineTo(arrowX + 6, entryY + 5);
     }
     ctx.fill();
 
     // Labels
     ctx.font = '10px JetBrains Mono, monospace';
+    const rr = d.riskRewardRatio || 0;
 
     // TP label
-    const tpText = `TP: ${tpPrice.toFixed(4)}  +${Math.abs(tpPrice - entryPrice).toFixed(4)}`;
+    const tpText = `TP ${tpPrice.toFixed(5)}  +${Math.abs(tpPrice - entryPrice).toFixed(5)}`;
     const tpTw = ctx.measureText(tpText).width;
     ctx.fillStyle = NUBIAN_LONG + '20';
     ctx.beginPath(); ctx.roundRect(x1 + 4, tpY + (tpY < entryY ? -18 : 4), tpTw + 10, 16, 3); ctx.fill();
@@ -670,37 +1012,167 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     ctx.fillText(tpText, x1 + 9, tpY + (tpY < entryY ? -6 : 16));
 
     // SL label
-    const slText = `SL: ${slPrice.toFixed(4)}  -${Math.abs(entryPrice - slPrice).toFixed(4)}`;
+    const slText = `SL ${slPrice.toFixed(5)}  -${Math.abs(entryPrice - slPrice).toFixed(5)}`;
     const slTw = ctx.measureText(slText).width;
     ctx.fillStyle = NUBIAN_SHORT + '20';
     ctx.beginPath(); ctx.roundRect(x1 + 4, slY + (slY > entryY ? 4 : -18), slTw + 10, 16, 3); ctx.fill();
     ctx.fillStyle = NUBIAN_SHORT;
     ctx.fillText(slText, x1 + 9, slY + (slY > entryY ? 16 : -6));
 
-    // Entry label with R:R
-    const rr = drawing.riskRewardRatio || 0;
-    const entryText = `${isLong ? '▲ LONG' : '▼ SHORT'} @ ${entryPrice.toFixed(4)}  R:R 1:${rr.toFixed(1)}`;
+    // Entry label
+    const entryText = `${isLong ? '▲ LONG' : '▼ SHORT'} @ ${entryPrice.toFixed(5)}  R:R 1:${rr.toFixed(1)}`;
     const entryTw = ctx.measureText(entryText).width;
     ctx.fillStyle = NUBIAN_GOLD + '20';
     ctx.beginPath(); ctx.roundRect(x1 + 4, entryY - 20, entryTw + 10, 16, 3); ctx.fill();
     ctx.fillStyle = NUBIAN_GOLD;
     ctx.fillText(entryText, x1 + 9, entryY - 8);
 
-    // Pips on the right
+    // Pips
     const risk = Math.abs(entryPrice - slPrice);
     const reward = Math.abs(tpPrice - entryPrice);
     ctx.font = '9px JetBrains Mono, monospace';
     ctx.fillStyle = NUBIAN_LONG + '80';
-    ctx.fillText(`+${(reward * 10000).toFixed(0)} pips`, x1 + boxWidth + 4, (entryY + tpY) / 2 + 3);
+    ctx.fillText(`+${(reward * 10000).toFixed(0)}p`, x1 + boxWidth + 4, (entryY + tpY) / 2 + 3);
     ctx.fillStyle = NUBIAN_SHORT + '80';
-    ctx.fillText(`-${(risk * 10000).toFixed(0)} pips`, x1 + boxWidth + 4, (entryY + slY) / 2 + 3);
+    ctx.fillText(`-${(risk * 10000).toFixed(0)}p`, x1 + boxWidth + 4, (entryY + slY) / 2 + 3);
 
-    // Anchor dots when selected
     if (isSelected) {
       drawAnchor(ctx, x1, entryY, NUBIAN_GOLD, true);
       drawAnchor(ctx, x1, slY, NUBIAN_SHORT, true);
       drawAnchor(ctx, x1, tpY, NUBIAN_LONG, true);
     }
+  }
+
+  function renderMeasure(ctx: CanvasRenderingContext2D, d: Drawing, series: any, timeScale: any, isSelected: boolean) {
+    const x1 = timeScale.timeToCoordinate(d.points[0].time as any);
+    const y1 = series.priceToCoordinate(d.points[0].price);
+    const x2 = timeScale.timeToCoordinate(d.points[1].time as any);
+    const y2 = series.priceToCoordinate(d.points[1].price);
+    if (x1 === null || y1 === null || x2 === null || y2 === null) return;
+
+    // Dashed line
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Measurement box
+    const priceDiff = d.points[1].price - d.points[0].price;
+    const pips = Math.abs(priceDiff) * (d.points[0].price > 10 ? 100 : 10000);
+    const timeDiff = Math.abs(d.points[1].time - d.points[0].time);
+    const bars = Math.round(timeDiff / 60);
+    const percent = ((priceDiff / d.points[0].price) * 100).toFixed(2);
+
+    const midX = (x1 + x2) / 2;
+    const midY = (y1 + y2) / 2;
+    ctx.font = '10px JetBrains Mono, monospace';
+    const lines = [
+      `${priceDiff >= 0 ? '+' : ''}${priceDiff.toFixed(5)}`,
+      `${pips.toFixed(0)} pips (${percent}%)`,
+      `${bars} bars`,
+    ];
+    const maxW = Math.max(...lines.map(l => ctx.measureText(l).width));
+    const boxH = lines.length * 14 + 8;
+    const boxX = midX - maxW / 2 - 8;
+    const boxY = midY - boxH / 2;
+
+    ctx.fillStyle = '#1a1510e0';
+    ctx.beginPath(); ctx.roundRect(boxX, boxY, maxW + 16, boxH, 5); ctx.fill();
+    ctx.strokeStyle = d.color + '40';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.roundRect(boxX, boxY, maxW + 16, boxH, 5); ctx.stroke();
+
+    ctx.fillStyle = priceDiff >= 0 ? NUBIAN_LONG : NUBIAN_SHORT;
+    ctx.fillText(lines[0], boxX + 8, boxY + 16);
+    ctx.fillStyle = '#a0855c';
+    ctx.fillText(lines[1], boxX + 8, boxY + 30);
+    ctx.fillText(lines[2], boxX + 8, boxY + 44);
+
+    drawAnchor(ctx, x1, y1, d.color, isSelected);
+    drawAnchor(ctx, x2, y2, d.color, isSelected);
+  }
+
+  function renderPriceRange(ctx: CanvasRenderingContext2D, d: Drawing, series: any, timeScale: any, isSelected: boolean) {
+    const x1 = timeScale.timeToCoordinate(d.points[0].time as any);
+    const y1 = series.priceToCoordinate(d.points[0].price);
+    const x2 = timeScale.timeToCoordinate(d.points[1].time as any);
+    const y2 = series.priceToCoordinate(d.points[1].price);
+    if (x1 === null || y1 === null || x2 === null || y2 === null) return;
+
+    const rx = Math.min(x1, x2), rw = Math.abs(x2 - x1);
+    const ry = Math.min(y1, y2), rh = Math.abs(y2 - y1);
+    const priceDiff = d.points[1].price - d.points[0].price;
+    const color = priceDiff >= 0 ? NUBIAN_LONG : NUBIAN_SHORT;
+
+    ctx.fillStyle = color + '12';
+    ctx.fillRect(rx, ry, rw, rh);
+    ctx.strokeStyle = color + '60';
+    ctx.setLineDash([3, 3]);
+    ctx.strokeRect(rx, ry, rw, rh);
+    ctx.setLineDash([]);
+
+    // Arrow
+    const midX = rx + rw / 2;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(midX, y1); ctx.lineTo(midX, y2); ctx.stroke();
+    // Arrow head
+    const dir = y2 < y1 ? -1 : 1;
+    ctx.beginPath();
+    ctx.moveTo(midX, y2);
+    ctx.lineTo(midX - 5, y2 - dir * 8);
+    ctx.lineTo(midX + 5, y2 - dir * 8);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+
+    // Label
+    const pips = Math.abs(priceDiff) * (d.points[0].price > 10 ? 100 : 10000);
+    ctx.font = '10px JetBrains Mono, monospace';
+    const text = `${priceDiff >= 0 ? '+' : ''}${priceDiff.toFixed(5)} (${pips.toFixed(0)}p)`;
+    ctx.fillStyle = color;
+    ctx.fillText(text, midX + 10, (y1 + y2) / 2 + 4);
+
+    drawAnchor(ctx, x1, y1, d.color, isSelected);
+    drawAnchor(ctx, x2, y2, d.color, isSelected);
+  }
+
+  function renderText(ctx: CanvasRenderingContext2D, d: Drawing, series: any, timeScale: any, isSelected: boolean) {
+    const x = timeScale.timeToCoordinate(d.points[0].time as any);
+    const y = series.priceToCoordinate(d.points[0].price);
+    if (x === null || y === null) return;
+
+    const text = d.text || d.label || 'Note';
+    ctx.font = `${12 + d.lineWidth}px Outfit, sans-serif`;
+    const tw = ctx.measureText(text).width;
+
+    ctx.fillStyle = '#1a1510cc';
+    ctx.beginPath(); ctx.roundRect(x - 4, y - 14, tw + 8, 20, 4); ctx.fill();
+    ctx.fillStyle = d.color;
+    ctx.fillText(text, x, y);
+
+    if (isSelected) {
+      ctx.strokeStyle = d.color + '60';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.strokeRect(x - 6, y - 16, tw + 12, 24);
+      ctx.setLineDash([]);
+      drawAnchor(ctx, x - 4, y - 4, d.color, true);
+    }
+  }
+
+  function renderBrush(ctx: CanvasRenderingContext2D, d: Drawing) {
+    if (!d.brushPoints || d.brushPoints.length < 2) return;
+    ctx.strokeStyle = d.color;
+    ctx.lineWidth = d.lineWidth;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(d.brushPoints[0].x, d.brushPoints[0].y);
+    for (let i = 1; i < d.brushPoints.length; i++) {
+      ctx.lineTo(d.brushPoints[i].x, d.brushPoints[i].y);
+    }
+    ctx.stroke();
   }
 
   function renderPendingPreview(ctx: CanvasRenderingContext2D, series: any, timeScale: any, width: number, height: number) {
@@ -720,7 +1192,7 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
             ctx.setLineDash([]);
             ctx.font = '10px JetBrains Mono, monospace';
             ctx.fillStyle = NUBIAN_GOLD;
-            ctx.fillText(pt.price.toFixed(4), 10, y - 4);
+            ctx.fillText(pt.price.toFixed(5), 60, y - 4);
             ctx.setLineDash([3, 3]);
           }
         }
@@ -732,25 +1204,25 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
             ctx.setLineDash([]);
             ctx.font = '10px JetBrains Mono, monospace';
             ctx.fillStyle = NUBIAN_AMBER;
-            ctx.fillText(snapPrice(mousePrice).toFixed(4), 10, mouseRef.current.y - 4);
+            ctx.fillText(snapPrice(mousePrice).toFixed(5), 60, mouseRef.current.y - 4);
           }
         }
         // Step indicator
         ctx.setLineDash([]);
-        ctx.font = '12px Outfit, sans-serif';
-        const labels = ['① Click to set Entry', '② Click to set Stop Loss', '③ Click to set Take Profit'];
+        ctx.font = '11px Outfit, sans-serif';
+        const labels = ['① Entry', '② Stop Loss', '③ Take Profit'];
         const bgText = labels[pts.length] || '';
         const tw = ctx.measureText(bgText).width;
         ctx.fillStyle = '#1a1510e0';
-        ctx.beginPath(); ctx.roundRect(8, 6, tw + 16, 24, 6); ctx.fill();
+        ctx.beginPath(); ctx.roundRect(54, 6, tw + 16, 22, 5); ctx.fill();
         ctx.fillStyle = NUBIAN_GOLD;
-        ctx.fillText(bgText, 16, 22);
+        ctx.fillText(bgText, 62, 21);
       } else {
         const x1 = timeScale.timeToCoordinate(pts[0].time as any);
         const y1 = series.priceToCoordinate(pts[0].price);
         if (x1 !== null && y1 !== null) {
           ctx.beginPath();
-          if (activeTool === 'rectangle') {
+          if (activeTool === 'rectangle' || activeTool === 'ellipse' || activeTool === 'price_range') {
             const rx = Math.min(x1, mouseRef.current.x);
             const ry = Math.min(y1, mouseRef.current.y);
             ctx.strokeRect(rx, ry, Math.abs(mouseRef.current.x - x1), Math.abs(mouseRef.current.y - y1));
@@ -759,6 +1231,16 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
             ctx.lineTo(mouseRef.current.x, mouseRef.current.y);
             ctx.stroke();
           }
+          // For 3-click tools with 1 or 2 points placed
+          if (pts.length >= 1 && (activeTool === 'triangle' || activeTool === 'pitchfork' || activeTool === 'fib_extension')) {
+            for (const pt of pts) {
+              const px = timeScale.timeToCoordinate(pt.time as any);
+              const py = series.priceToCoordinate(pt.price);
+              if (px !== null && py !== null) {
+                drawAnchor(ctx, px, py, DEFAULT_COLORS[activeTool], true);
+              }
+            }
+          }
         }
       }
       ctx.setLineDash([]);
@@ -766,17 +1248,17 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
 
     // Step hint for position tools (no points yet)
     if ((activeTool === 'position_long' || activeTool === 'position_short') && pendingPointsRef.current.length === 0) {
-      ctx.font = '12px Outfit, sans-serif';
+      ctx.font = '11px Outfit, sans-serif';
       const bgText = '① Click to set Entry Price';
       const tw = ctx.measureText(bgText).width;
       ctx.fillStyle = '#1a1510e0';
-      ctx.beginPath(); ctx.roundRect(8, 6, tw + 16, 24, 6); ctx.fill();
+      ctx.beginPath(); ctx.roundRect(54, 6, tw + 16, 22, 5); ctx.fill();
       ctx.fillStyle = NUBIAN_GOLD;
-      ctx.fillText(bgText, 16, 22);
+      ctx.fillText(bgText, 62, 21);
     }
 
     // Crosshair snap for other tools
-    if (activeTool && !(activeTool === 'position_long' || activeTool === 'position_short') && pendingPointsRef.current.length === 0 && mouseRef.current) {
+    if (activeTool && !['position_long', 'position_short', 'brush'].includes(activeTool) && pendingPointsRef.current.length === 0 && mouseRef.current) {
       const mousePrice = series.coordinateToPrice(mouseRef.current.y);
       if (mousePrice !== null) {
         ctx.strokeStyle = NUBIAN_AMBER + '40';
@@ -785,7 +1267,7 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
         ctx.setLineDash([]);
         ctx.font = '10px JetBrains Mono, monospace';
         ctx.fillStyle = NUBIAN_AMBER;
-        ctx.fillText(snapPrice(mousePrice).toFixed(4), mouseRef.current.x + 10, mouseRef.current.y - 6);
+        ctx.fillText(snapPrice(mousePrice).toFixed(5), mouseRef.current.x + 10, mouseRef.current.y - 6);
       }
     }
   }
@@ -836,7 +1318,7 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
         style={{ zIndex: 10, cursor: dragState ? 'grabbing' : (hoveredDrawingId && !activeTool ? 'pointer' : undefined) }}
       />
 
-      {/* Floating toolbar on selected drawing */}
+      {/* Floating toolbar */}
       {selectedDrawing && toolbarPos && (
         <DrawingFloatingToolbar
           drawing={selectedDrawing}
@@ -849,10 +1331,10 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
         />
       )}
 
-      {/* Right-click context menu */}
+      {/* Context menu */}
       {contextMenu && (
         <div
-          className="absolute z-50 bg-card border border-border rounded-md shadow-xl py-1 min-w-[160px] animate-in fade-in zoom-in-95 duration-100"
+          className="absolute z-50 bg-card/95 backdrop-blur-sm border border-border rounded-lg shadow-2xl py-1 min-w-[180px] animate-in fade-in zoom-in-95 duration-100"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           {(() => {
@@ -863,30 +1345,46 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
               <>
                 {isPosition && onPlacePendingOrder && (
                   <button
-                    className="w-full text-left px-3 py-1.5 text-xs hover:bg-primary/10 text-primary flex items-center gap-2"
+                    className="w-full text-left px-3 py-1.5 text-xs hover:bg-primary/10 text-primary flex items-center gap-2 transition-colors"
                     onClick={() => handlePlaceOrderFromDrawing(d.id)}
                   >
                     📋 Place as Pending Order
                   </button>
                 )}
                 <button
-                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-secondary text-foreground"
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-secondary text-foreground flex items-center gap-2 transition-colors"
                   onClick={() => { handleUpdateDrawing({ ...d, locked: !d.locked }); setContextMenu(null); }}
                 >
                   {d.locked ? '🔓 Unlock' : '🔒 Lock'}
                 </button>
                 <button
-                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-secondary text-foreground"
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-secondary text-foreground flex items-center gap-2 transition-colors"
+                  onClick={() => { handleUpdateDrawing({ ...d, visible: d.visible === false ? true : false }); setContextMenu(null); }}
+                >
+                  {d.visible === false ? '👁️ Show' : '🙈 Hide'}
+                </button>
+                <button
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-secondary text-foreground flex items-center gap-2 transition-colors"
                   onClick={() => handleDuplicateDrawing(d.id)}
                 >
                   📄 Duplicate
                 </button>
                 <div className="border-t border-border my-1" />
                 <button
-                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-destructive/10 text-destructive"
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-destructive/10 text-destructive flex items-center gap-2 transition-colors"
                   onClick={() => handleDeleteDrawing(d.id)}
                 >
                   🗑️ Delete
+                </button>
+                <button
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-destructive/10 text-destructive/60 flex items-center gap-2 transition-colors"
+                  onClick={() => {
+                    onDrawingsChange(drawings.filter(dd => dd.type !== d.type));
+                    setContextMenu(null);
+                    setSelectedDrawingId(null);
+                  }}
+                >
+                  🗑️ Remove all {d.type.replace('_', ' ')}s
                 </button>
               </>
             );

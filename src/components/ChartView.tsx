@@ -66,19 +66,16 @@ function MiniChart({ bars, label, currentBarTime }: { bars: OHLCVBar[]; timefram
     return () => { window.removeEventListener('resize', handleResize); chart.remove(); chartRef.current = null; seriesRef.current = null; };
   }, []);
 
-  // Update data reactively
   useEffect(() => {
     if (!seriesRef.current) return;
     seriesRef.current.setData(bars.map(b => ({ time: b.time as any, open: b.open, high: b.high, low: b.low, close: b.close })));
   }, [bars]);
 
-  // Scroll to current time
   useEffect(() => {
     if (!chartRef.current || !currentBarTime) return;
     chartRef.current.timeScale().scrollToPosition(-2, false);
   }, [currentBarTime]);
 
-  // Last bar info
   const lastBar = bars[bars.length - 1];
 
   return (
@@ -116,6 +113,12 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
   const [activeTool, setActiveTool] = useState<DrawingType | null>(null);
   const [drawings, setDrawings] = useState<Drawing[]>(loadedProject?.drawings || []);
   const [chartStyle, setChartStyle] = useState<ChartStyle>('candles');
+  const [favorites, setFavorites] = useState<(DrawingType | null)[]>(() => {
+    try {
+      const stored = localStorage.getItem('repla_tool_favorites');
+      return stored ? JSON.parse(stored) : ['trendline', 'horizontal', 'fibonacci'];
+    } catch { return ['trendline', 'horizontal', 'fibonacci']; }
+  });
 
   // Trading state
   const [orders, setOrders] = useState<Order[]>([]);
@@ -123,6 +126,16 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
   const [showJournal, setShowJournal] = useState(false);
   const [showMultiChart, setShowMultiChart] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
+
+  const handleToggleFavorite = useCallback((type: DrawingType | null) => {
+    setFavorites(prev => {
+      const next = prev.includes(type)
+        ? prev.filter(t => t !== type)
+        : [...prev, type].slice(0, 8); // max 8 favorites
+      localStorage.setItem('repla_tool_favorites', JSON.stringify(next));
+      return next;
+    });
+  }, []);
 
   const handleSaveProject = useCallback(async (name: string) => {
     setProjectName(name);
@@ -152,7 +165,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
   const totalBars = allBars.length;
   const visibleBars = allBars.slice(0, Math.min(currentBarIndex, totalBars));
 
-  // Multi-timeframe bars - compute 3 higher TFs relative to current
+  // Multi-timeframe bars
   const tf1Val = Math.max(baseTimeframe, 15);
   const tf2Val = Math.max(baseTimeframe * 4, 60);
   const tf3Val = Math.max(baseTimeframe * 16, 240);
@@ -169,11 +182,9 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
   useEffect(() => {
     if (!lastBar || orders.length === 0) return;
     const updated = processBar(lastBar, orders);
-    // Check if any order status changed
     const changed = updated.some((o, i) => o.status !== orders[i].status);
     if (changed) {
       setOrders(updated);
-      // Notify on fills/closes
       updated.forEach((o, i) => {
         if (o.status !== orders[i].status) {
           if (o.status === 'closed') {
@@ -308,9 +319,6 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
       time: b.time as any, value: b.volume,
       color: b.close >= b.open ? 'rgba(76, 175, 80, 0.25)' : 'rgba(224, 83, 71, 0.25)',
     })));
-
-    // Add markers for open orders (entry lines via price lines)
-    // We'll handle this via the canvas overlay approach in DrawingOverlay
   }, [visibleBars]);
 
   // Playback
@@ -349,7 +357,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
       switch (e.key) {
         case ' ': e.preventDefault(); handlePlayPause(); break;
         case 'ArrowRight': e.preventDefault(); setCurrentBarIndex(prev => Math.min(prev + 1, totalBars)); break;
@@ -358,6 +366,12 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
         case 'h': case 'H': setActiveTool('horizontal'); break;
         case 't': case 'T': setActiveTool('trendline'); break;
         case 'f': case 'F': setActiveTool('fibonacci'); break;
+        case 'r': case 'R': setActiveTool('ray'); break;
+        case 'v': setActiveTool('vertical'); break;
+        case 'b': case 'B': setActiveTool('brush'); break;
+        case 'l': setActiveTool('position_long'); break;
+        case 's': setActiveTool('position_short'); break;
+        case 'm': setActiveTool('measure'); break;
         case 'j': case 'J': setShowJournal(p => !p); break;
       }
     };
@@ -466,14 +480,6 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
         </div>
       </div>
 
-      {/* Drawing toolbar */}
-      <ChartToolbar
-        activeTool={activeTool}
-        onToolChange={setActiveTool}
-        onClearDrawings={() => setDrawings([])}
-        drawingCount={drawings.length}
-      />
-
       {/* Main content area */}
       <div className="flex-1 flex overflow-hidden relative">
         {/* Multi-TF side panel */}
@@ -494,7 +500,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
           </div>
         )}
 
-        {/* Chart area */}
+        {/* Chart area with left toolbar overlay */}
         <div className="flex-1 relative" style={{ cursor: activeTool ? 'crosshair' : 'default' }}>
           <div ref={containerRef} className="absolute inset-0" />
           <SessionOverlay chart={chartRef.current} containerRef={containerRef} visibleBars={visibleBars} showSessions={showSessions} />
@@ -507,9 +513,18 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
             containerRef={containerRef}
             onPlacePendingOrder={handlePlacePendingOrder}
           />
+          {/* TradingView-style left sidebar toolbar */}
+          <ChartToolbar
+            activeTool={activeTool}
+            onToolChange={setActiveTool}
+            onClearDrawings={() => setDrawings([])}
+            drawingCount={drawings.length}
+            favorites={favorites}
+            onToggleFavorite={handleToggleFavorite}
+          />
         </div>
 
-        {/* Trade panel - always rendered, handles its own collapse */}
+        {/* Trade panel */}
         <TradePanel
           currentPrice={currentPrice}
           onPlaceOrder={handlePlaceOrder}
