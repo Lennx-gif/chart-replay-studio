@@ -49,7 +49,6 @@ const Index = () => {
         volume: Number(b.volume || 0),
       }));
 
-      // Generate a CSV-equivalent string for project saving compatibility
       const csvLines = ['timestamp,open,high,low,close,volume'];
       parsed.forEach((b) => {
         csvLines.push(`${b.time},${b.open},${b.high},${b.low},${b.close},${b.volume}`);
@@ -93,6 +92,7 @@ const Index = () => {
       csvText={csvText}
       loadedProject={loadedProject}
       onLoadProject={handleLoadProject}
+      onSymbolChange={handleSymbolLoad}
       onReset={() => { setBars(null); setFileName(''); setCsvText(''); setLoadedProject(null); }}
     />
   );
