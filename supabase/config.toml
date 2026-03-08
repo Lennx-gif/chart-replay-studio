@@ -1,1 +1,4 @@
 project_id = "zdlubahrnlcmvcdsmxni"
+
+[functions.fetch-market-data]
+verify_jwt = false
