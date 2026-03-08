@@ -4,7 +4,7 @@ import type { OHLCVBar } from '@/lib/csvParser';
 import { resampleBars, applyTimezoneOffset, detectBaseTimeframe } from '@/lib/csvParser';
 import type { Drawing, DrawingType } from '@/lib/drawings';
 import type { Order, OrderSide } from '@/lib/tradeEngine';
-import { createMarketOrder, processBar, calculateStats } from '@/lib/tradeEngine';
+import { createMarketOrder, createLimitOrder, processBar, calculateStats } from '@/lib/tradeEngine';
 import { saveProject, generateProjectId, type SavedProject } from '@/lib/projectStorage';
 import { ChartToolbar } from './ChartToolbar';
 import { ReplayControls } from './ReplayControls';
