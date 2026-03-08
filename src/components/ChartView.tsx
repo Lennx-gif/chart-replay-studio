@@ -233,21 +233,21 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
 
     let mainSeries: ISeriesApi<any>;
     if (chartStyle === 'line') {
-      mainSeries = chart.addLineSeries({ color: '#26a69a', lineWidth: 2 });
+      mainSeries = chart.addLineSeries({ color: '#d4a54a', lineWidth: 2 });
     } else if (chartStyle === 'area') {
       mainSeries = chart.addAreaSeries({
-        topColor: 'rgba(38, 166, 154, 0.4)', bottomColor: 'rgba(38, 166, 154, 0.0)',
-        lineColor: '#26a69a', lineWidth: 2,
+        topColor: 'rgba(212, 165, 74, 0.35)', bottomColor: 'rgba(212, 165, 74, 0.0)',
+        lineColor: '#d4a54a', lineWidth: 2,
       });
     } else if (chartStyle === 'bars') {
       mainSeries = chart.addBarSeries({
-        upColor: '#26a69a', downColor: '#ef5350',
+        upColor: '#4caf50', downColor: '#e05347',
       });
     } else {
       mainSeries = chart.addCandlestickSeries({
-        upColor: '#26a69a', downColor: '#ef5350',
-        borderDownColor: '#ef5350', borderUpColor: '#26a69a',
-        wickDownColor: '#ef5350', wickUpColor: '#26a69a',
+        upColor: '#4caf50', downColor: '#e05347',
+        borderDownColor: '#e05347', borderUpColor: '#4caf50',
+        wickDownColor: '#e05347', wickUpColor: '#4caf50',
       });
     }
 
