@@ -27,6 +27,7 @@ interface ChartViewProps {
   csvText: string;
   loadedProject: SavedProject | null;
   onLoadProject: (project: SavedProject) => void;
+  onSymbolChange: (symbol: string, timeframe: string) => void;
   onReset: () => void;
 }
 
