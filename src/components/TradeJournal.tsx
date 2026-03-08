@@ -6,12 +6,13 @@ import { calculateStats } from '@/lib/tradeEngine';
 interface TradeJournalProps {
   orders: Order[];
   onClose: () => void;
+  startingBalance?: number;
 }
 
-export function TradeJournal({ orders, onClose }: TradeJournalProps) {
+export function TradeJournal({ orders, onClose, startingBalance = 10000 }: TradeJournalProps) {
   const [tab, setTab] = useState<'stats' | 'log'>('stats');
   const closed = orders.filter(o => o.status === 'closed');
-  const stats = calculateStats(orders);
+  const stats = calculateStats(orders, startingBalance);
 
   return (
     <div className="absolute inset-0 z-40 bg-background/95 backdrop-blur-sm flex flex-col">

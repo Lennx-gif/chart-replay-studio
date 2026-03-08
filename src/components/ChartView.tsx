@@ -87,6 +87,8 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [projectId, setProjectId] = useState(loadedProject?.id || generateProjectId());
   const [projectName, setProjectName] = useState(loadedProject?.name || fileName);
+  const { profile } = useAuth();
+  const startingBalance = profile?.starting_balance || 10000;
 
   const baseTimeframe = detectBaseTimeframe(rawBars);
   const [timeframe, setTimeframe] = useState(loadedProject?.timeframe || baseTimeframe);
