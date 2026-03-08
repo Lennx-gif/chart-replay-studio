@@ -102,6 +102,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
   const [speed, setSpeed] = useState(loadedProject?.speed || 1);
   const [activeTool, setActiveTool] = useState<DrawingType | null>(null);
   const [drawings, setDrawings] = useState<Drawing[]>(loadedProject?.drawings || []);
+  const [chartStyle, setChartStyle] = useState<ChartStyle>('candles');
 
   // Trading state
   const [orders, setOrders] = useState<Order[]>([]);
