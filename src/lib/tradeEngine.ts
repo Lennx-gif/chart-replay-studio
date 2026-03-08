@@ -138,7 +138,7 @@ export function processBar(bar: OHLCVBar, orders: Order[]): Order[] {
   });
 }
 
-export function calculateStats(orders: Order[]): TradeStats {
+export function calculateStats(orders: Order[], startingBalance: number = 10000): TradeStats {
   const closed = orders.filter(o => o.status === 'closed' && o.pnl != null);
   const wins = closed.filter(o => o.pnl! > 0);
   const losses = closed.filter(o => o.pnl! < 0);
@@ -148,8 +148,8 @@ export function calculateStats(orders: Order[]): TradeStats {
   const grossWin = wins.reduce((sum, o) => sum + (o.pnl || 0), 0);
   const grossLoss = Math.abs(losses.reduce((sum, o) => sum + (o.pnl || 0), 0));
 
-  // Equity curve
-  let equity = 0;
+  // Equity curve starting from the configured balance
+  let equity = startingBalance;
   const equityCurve = closed
     .sort((a, b) => (a.closeTime || 0) - (b.closeTime || 0))
     .map(o => {

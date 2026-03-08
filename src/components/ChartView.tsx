@@ -16,6 +16,8 @@ import { TradePanel } from './TradePanel';
 import { TradeJournal } from './TradeJournal';
 import { GoToDate } from './GoToDate';
 import { SessionOverlay } from './SessionOverlay';
+import { BalanceSettings } from './BalanceSettings';
+import { useAuth } from '@/contexts/AuthContext';
 import { Globe, BarChart3, BookOpen, Columns, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -85,6 +87,8 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [projectId, setProjectId] = useState(loadedProject?.id || generateProjectId());
   const [projectName, setProjectName] = useState(loadedProject?.name || fileName);
+  const { profile } = useAuth();
+  const startingBalance = profile?.starting_balance || 10000;
 
   const baseTimeframe = detectBaseTimeframe(rawBars);
   const [timeframe, setTimeframe] = useState(loadedProject?.timeframe || baseTimeframe);
@@ -314,7 +318,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
     return () => window.removeEventListener('keydown', handler);
   }, [handlePlayPause, totalBars]);
 
-  const stats = calculateStats(orders);
+  const stats = calculateStats(orders, startingBalance);
 
   return (
     <div className="flex flex-col h-screen bg-background">
@@ -393,6 +397,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
             </button>
           </div>
 
+          <BalanceSettings />
           <ProjectManager onSave={handleSaveProject} onLoad={onLoadProject} currentProjectName={projectName} />
           <button className="toolbar-btn text-xs" onClick={onReset}>New File</button>
         </div>
@@ -443,7 +448,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
 
         {/* Journal overlay */}
         {showJournal && (
-          <TradeJournal orders={orders} onClose={() => setShowJournal(false)} />
+          <TradeJournal orders={orders} onClose={() => setShowJournal(false)} startingBalance={startingBalance} />
         )}
       </div>
 
