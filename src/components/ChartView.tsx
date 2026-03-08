@@ -252,7 +252,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
     }
 
     const volumeSeries = chart.addHistogramSeries({
-      color: '#26a69a',
+      color: '#d4a54a',
       priceFormat: { type: 'volume' },
       priceScaleId: '',
     });
