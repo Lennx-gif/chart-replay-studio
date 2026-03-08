@@ -102,20 +102,24 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
   const [showMultiChart, setShowMultiChart] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
 
-  const handleSaveProject = useCallback((name: string) => {
+  const handleSaveProject = useCallback(async (name: string) => {
     setProjectName(name);
-    saveProject({
-      id: projectId,
-      name,
-      savedAt: Date.now(),
-      fileName,
-      timeframe,
-      tzOffset,
-      currentBarIndex,
-      speed,
-      drawings,
-      csvData: csvText,
-    });
+    try {
+      await saveProject({
+        id: projectId,
+        name,
+        savedAt: Date.now(),
+        fileName,
+        timeframe,
+        tzOffset,
+        currentBarIndex,
+        speed,
+        drawings,
+        csvData: csvText,
+      });
+    } catch (err: any) {
+      toast.error('Failed to save: ' + (err.message || 'Unknown error'));
+    }
   }, [projectId, fileName, timeframe, tzOffset, currentBarIndex, speed, drawings, csvText]);
 
   // Compute displayed bars
