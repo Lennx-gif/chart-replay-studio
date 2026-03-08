@@ -318,7 +318,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
     return () => window.removeEventListener('keydown', handler);
   }, [handlePlayPause, totalBars]);
 
-  const stats = calculateStats(orders);
+  const stats = calculateStats(orders, startingBalance);
 
   return (
     <div className="flex flex-col h-screen bg-background">
