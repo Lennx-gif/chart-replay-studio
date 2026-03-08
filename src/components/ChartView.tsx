@@ -42,11 +42,11 @@ function MiniChart({ bars, timeframe, label }: { bars: OHLCVBar[]; timeframe: nu
   useEffect(() => {
     if (!containerRef.current) return;
     const chart = createChart(containerRef.current, {
-      layout: { background: { type: ColorType.Solid, color: '#131720' }, textColor: '#6a707e', fontSize: 9 },
+      layout: { background: { type: ColorType.Solid, color: '#1a1510' }, textColor: '#a0855c', fontSize: 9 },
       grid: { vertLines: { visible: false }, horzLines: { visible: false } },
-      rightPriceScale: { borderColor: '#2a3040', scaleMargins: { top: 0.05, bottom: 0.05 } },
-      timeScale: { borderColor: '#2a3040', timeVisible: true, secondsVisible: false },
-      crosshair: { vertLine: { color: '#3a8f9f', width: 1, style: 2 }, horzLine: { color: '#3a8f9f', width: 1, style: 2 } },
+      rightPriceScale: { borderColor: '#2a2218', scaleMargins: { top: 0.05, bottom: 0.05 } },
+      timeScale: { borderColor: '#2a2218', timeVisible: true, secondsVisible: false },
+      crosshair: { vertLine: { color: '#c47d2e', width: 1, style: 2 }, horzLine: { color: '#c47d2e', width: 1, style: 2 } },
     });
     const series = chart.addCandlestickSeries({
       upColor: '#26a69a', downColor: '#ef5350',
