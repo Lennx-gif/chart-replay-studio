@@ -42,16 +42,16 @@ function MiniChart({ bars, timeframe, label }: { bars: OHLCVBar[]; timeframe: nu
   useEffect(() => {
     if (!containerRef.current) return;
     const chart = createChart(containerRef.current, {
-      layout: { background: { type: ColorType.Solid, color: '#131720' }, textColor: '#6a707e', fontSize: 9 },
+      layout: { background: { type: ColorType.Solid, color: '#1a1510' }, textColor: '#a0855c', fontSize: 9 },
       grid: { vertLines: { visible: false }, horzLines: { visible: false } },
-      rightPriceScale: { borderColor: '#2a3040', scaleMargins: { top: 0.05, bottom: 0.05 } },
-      timeScale: { borderColor: '#2a3040', timeVisible: true, secondsVisible: false },
-      crosshair: { vertLine: { color: '#3a8f9f', width: 1, style: 2 }, horzLine: { color: '#3a8f9f', width: 1, style: 2 } },
+      rightPriceScale: { borderColor: '#2a2218', scaleMargins: { top: 0.05, bottom: 0.05 } },
+      timeScale: { borderColor: '#2a2218', timeVisible: true, secondsVisible: false },
+      crosshair: { vertLine: { color: '#c47d2e', width: 1, style: 2 }, horzLine: { color: '#c47d2e', width: 1, style: 2 } },
     });
     const series = chart.addCandlestickSeries({
-      upColor: '#26a69a', downColor: '#ef5350',
-      borderDownColor: '#ef5350', borderUpColor: '#26a69a',
-      wickDownColor: '#ef5350', wickUpColor: '#26a69a',
+      upColor: '#4caf50', downColor: '#e05347',
+      borderDownColor: '#e05347', borderUpColor: '#4caf50',
+      wickDownColor: '#e05347', wickUpColor: '#4caf50',
     });
     series.setData(bars.map(b => ({ time: b.time as any, open: b.open, high: b.high, low: b.low, close: b.close })));
     chart.timeScale().fitContent();
@@ -68,9 +68,9 @@ function MiniChart({ bars, timeframe, label }: { bars: OHLCVBar[]; timeframe: nu
   useEffect(() => {
     if (!chartRef.current) return;
     const series = chartRef.current.addCandlestickSeries({
-      upColor: '#26a69a', downColor: '#ef5350',
-      borderDownColor: '#ef5350', borderUpColor: '#26a69a',
-      wickDownColor: '#ef5350', wickUpColor: '#26a69a',
+      upColor: '#4caf50', downColor: '#e05347',
+      borderDownColor: '#e05347', borderUpColor: '#4caf50',
+      wickDownColor: '#e05347', wickUpColor: '#4caf50',
     });
     series.setData(bars.map(b => ({ time: b.time as any, open: b.open, high: b.high, low: b.low, close: b.close })));
   }, [bars]);
@@ -217,42 +217,42 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
     if (!containerRef.current) return;
     const chart = createChart(containerRef.current, {
       layout: {
-        background: { type: ColorType.Solid, color: '#171c24' },
-        textColor: '#8a919e',
+        background: { type: ColorType.Solid, color: '#1a1510' },
+        textColor: '#a0855c',
         fontFamily: "'JetBrains Mono', monospace",
         fontSize: 11,
       },
       grid: { vertLines: { visible: false }, horzLines: { visible: false } },
       crosshair: {
-        vertLine: { color: '#3a8f9f', width: 1, style: 2, labelBackgroundColor: '#1a6b7a' },
-        horzLine: { color: '#3a8f9f', width: 1, style: 2, labelBackgroundColor: '#1a6b7a' },
+        vertLine: { color: '#c47d2e', width: 1, style: 2, labelBackgroundColor: '#8b5e14' },
+        horzLine: { color: '#c47d2e', width: 1, style: 2, labelBackgroundColor: '#8b5e14' },
       },
-      rightPriceScale: { borderColor: '#2a3040', scaleMargins: { top: 0.1, bottom: 0.2 } },
-      timeScale: { borderColor: '#2a3040', timeVisible: true, secondsVisible: false },
+      rightPriceScale: { borderColor: '#2a2218', scaleMargins: { top: 0.1, bottom: 0.2 } },
+      timeScale: { borderColor: '#2a2218', timeVisible: true, secondsVisible: false },
     });
 
     let mainSeries: ISeriesApi<any>;
     if (chartStyle === 'line') {
-      mainSeries = chart.addLineSeries({ color: '#26a69a', lineWidth: 2 });
+      mainSeries = chart.addLineSeries({ color: '#d4a54a', lineWidth: 2 });
     } else if (chartStyle === 'area') {
       mainSeries = chart.addAreaSeries({
-        topColor: 'rgba(38, 166, 154, 0.4)', bottomColor: 'rgba(38, 166, 154, 0.0)',
-        lineColor: '#26a69a', lineWidth: 2,
+        topColor: 'rgba(212, 165, 74, 0.35)', bottomColor: 'rgba(212, 165, 74, 0.0)',
+        lineColor: '#d4a54a', lineWidth: 2,
       });
     } else if (chartStyle === 'bars') {
       mainSeries = chart.addBarSeries({
-        upColor: '#26a69a', downColor: '#ef5350',
+        upColor: '#4caf50', downColor: '#e05347',
       });
     } else {
       mainSeries = chart.addCandlestickSeries({
-        upColor: '#26a69a', downColor: '#ef5350',
-        borderDownColor: '#ef5350', borderUpColor: '#26a69a',
-        wickDownColor: '#ef5350', wickUpColor: '#26a69a',
+        upColor: '#4caf50', downColor: '#e05347',
+        borderDownColor: '#e05347', borderUpColor: '#4caf50',
+        wickDownColor: '#e05347', wickUpColor: '#4caf50',
       });
     }
 
     const volumeSeries = chart.addHistogramSeries({
-      color: '#26a69a',
+      color: '#d4a54a',
       priceFormat: { type: 'volume' },
       priceScaleId: '',
     });
@@ -283,7 +283,7 @@ export function ChartView({ rawBars, fileName, csvText, loadedProject, onLoadPro
     }
     volumeSeriesRef.current.setData(visibleBars.map(b => ({
       time: b.time as any, value: b.volume,
-      color: b.close >= b.open ? 'rgba(38, 166, 154, 0.3)' : 'rgba(239, 83, 80, 0.3)',
+      color: b.close >= b.open ? 'rgba(76, 175, 80, 0.25)' : 'rgba(224, 83, 71, 0.25)',
     })));
 
     // Add markers for open orders (entry lines via price lines)
