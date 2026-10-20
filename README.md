@@ -1,73 +1,62 @@
-# Welcome to your Lovable project
+# Chart Replay Studio
 
-## Project info
+Practise trading on historical price data, bar by bar. Everything runs in the browser and is stored in a
+local database (IndexedDB) on your machine — **no account, no login, no server**.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## Features
 
-## How can I edit this code?
+**Replay**
+- Play / pause with speeds from 0.25 to 100 units per second
+- Step by **bar** (finest data resolution) or by whole **candle** of the chart timeframe; Shift = ×10
+- Step backwards — trades placed after the rewind point are undone, trades that closed "in the future" are reopened
+- Higher timeframes are built only from bars revealed so far, so the newest candle is partial and nothing leaks from the future
+- Switch timeframe mid-replay without losing your place; multi-timeframe side panel
+- Jump to a date/time, next session open (Sydney / Tokyo / London / New York), ±1 day / +1 week, or any % of the data
+- Bookmarks with labels and next/previous navigation
+- Optional "pause on trade" — playback stops on the exact bar where an order fills or hits SL/TP
+- Orders are evaluated against every base bar, so a big jump can never skip a stop-loss or take-profit
 
-There are several ways of editing your application.
+**Trading & analysis**
+- Market and limit orders, SL/TP, close all, cancel pending; entry/SL/TP lines and entry/exit markers on the chart
+- Drawing tools, trade journal and statistics, market-session shading
 
-**Use Lovable**
+**Sessions & local storage**
+- Every replay is a *session*: position, trades, drawings, bookmarks, notes, timeframe and settings autosave continuously
+- Home screen lists sessions with progress and P&L; resume, duplicate or delete
+- Imported price data is stored once and reused across sessions
+- Back up everything to a single JSON file and restore it on another machine
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+## Data format
 
-Changes made via Lovable will be committed automatically to this repo.
+Import a CSV with either layout (header optional):
 
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
+```
+timestamp,open,high,low,close,volume
+date,time,open,high,low,close,volume
 ```
 
-**Edit a file directly in GitHub**
+Timestamps are read as wall-clock time (UTC) exactly as written in the file, independent of your browser's
+time zone; `YYYY-MM-DD`, `YYYY.MM.DD`, `YYYYMMDD` and epoch seconds/milliseconds are accepted.
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## Keyboard shortcuts
 
-**Use GitHub Codespaces**
+| Key | Action |
+| --- | --- |
+| Space | Play / pause |
+| ← / → | Step back / forward (Shift = 10) |
+| Home / End | Back to start / jump to end |
+| + / − | Faster / slower |
+| K, `[`, `]` | Add bookmark, previous / next bookmark |
+| J | Trade journal |
+| H T F R V B L S M | Drawing tools |
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+## Development
 
-## What technologies are used for this project?
+```sh
+npm install
+npm run dev      # start the app
+npm test         # unit tests (replay engine, trade engine, storage, CSV parsing)
+npm run build
+```
 
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+Stack: Vite, React, TypeScript, Tailwind + shadcn/ui, lightweight-charts, Dexie (IndexedDB).

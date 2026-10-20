@@ -6,6 +6,8 @@ export type OrderStatus = 'pending' | 'filled' | 'closed' | 'cancelled';
 
 export interface Order {
   id: string;
+  /** Bar time (unix seconds, UTC) at which the order was placed. */
+  createdTime: number;
   side: OrderSide;
   type: OrderType;
   entryPrice: number;
@@ -39,9 +41,8 @@ export interface TradeStats {
   equityCurve: { time: number; equity: number }[];
 }
 
-let nextOrderId = 1;
 export function createOrderId(): string {
-  return `order-${nextOrderId++}`;
+  return `order-${crypto.randomUUID()}`;
 }
 
 export function createMarketOrder(
@@ -54,6 +55,7 @@ export function createMarketOrder(
 ): Order {
   return {
     id: createOrderId(),
+    createdTime: currentTime,
     side,
     type: 'market',
     entryPrice: currentPrice,
@@ -69,12 +71,14 @@ export function createMarketOrder(
 export function createLimitOrder(
   side: OrderSide,
   limitPrice: number,
+  currentTime: number,
   size: number,
   stopLoss?: number,
   takeProfit?: number
 ): Order {
   return {
     id: createOrderId(),
+    createdTime: currentTime,
     side,
     type: 'limit',
     entryPrice: limitPrice,
@@ -136,6 +140,66 @@ export function processBar(bar: OHLCVBar, orders: Order[]): Order[] {
 
     return order;
   });
+}
+
+/**
+ * Run a sequence of bars (oldest first) through the order book. Used when the
+ * replay jumps several bars at once so nothing between the two positions is
+ * skipped — every bar gets a chance to fill orders and hit SL/TP.
+ */
+export function processBars(bars: OHLCVBar[], orders: Order[]): Order[] {
+  let result = orders;
+  for (const bar of bars) {
+    result = processBar(bar, result);
+  }
+  return result;
+}
+
+/**
+ * Undo everything that happened after `time`, so stepping the replay backwards
+ * never leaves trades that "haven't happened yet" on the books.
+ *  - orders created after `time` are removed
+ *  - orders closed after `time` are re-opened
+ *  - limit orders filled after `time` go back to pending
+ * Returns the same array reference when nothing needs to change.
+ */
+export function rewindOrders(orders: Order[], time: number): Order[] {
+  let changed = false;
+  const result: Order[] = [];
+
+  for (const order of orders) {
+    if (order.createdTime > time) {
+      changed = true;
+      continue;
+    }
+
+    if (order.status === 'closed' && order.closeTime != null && order.closeTime > time) {
+      changed = true;
+      const { closePrice, closeTime, closeReason, pnl, pnlPips, ...rest } = order;
+      void closePrice; void closeTime; void closeReason; void pnl; void pnlPips;
+      // It was filled before it closed; if the fill is also in the future, fall through.
+      if (order.fillTime != null && order.fillTime > time && order.type === 'limit') {
+        const { fillPrice, fillTime, ...pending } = rest;
+        void fillPrice; void fillTime;
+        result.push({ ...pending, status: 'pending' });
+      } else {
+        result.push({ ...rest, status: 'filled' });
+      }
+      continue;
+    }
+
+    if (order.status === 'filled' && order.type === 'limit' && order.fillTime != null && order.fillTime > time) {
+      changed = true;
+      const { fillPrice, fillTime, ...pending } = order;
+      void fillPrice; void fillTime;
+      result.push({ ...pending, status: 'pending' });
+      continue;
+    }
+
+    result.push(order);
+  }
+
+  return changed ? result : orders;
 }
 
 export function calculateStats(orders: Order[], startingBalance: number = 10000): TradeStats {

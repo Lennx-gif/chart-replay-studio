@@ -9,6 +9,30 @@ export interface OHLCVBar {
   volume: number;
 }
 
+/**
+ * Parse a CSV timestamp to unix seconds. Wall-clock times in the file are taken
+ * as-is (read as UTC, matching how the chart displays them) so the result does
+ * not depend on the browser's time zone. Accepts ISO-like strings
+ * ("2024-01-31 14:05:00", "2024.01.31 14:05", "20240131 14:05:00"), date-only
+ * values, and epoch seconds/milliseconds. Strings with an explicit zone
+ * ("Z", "+03:00") are honoured.
+ */
+export function parseTimestamp(date: string, time?: string): number | null {
+  const raw = (time ? `${date} ${time}` : date).trim();
+  if (/^\d{9,13}(\.\d+)?$/.test(raw)) {
+    const n = Number(raw);
+    return Math.floor(n > 1e11 ? n / 1000 : n);
+  }
+  let s = raw
+    .replace(/^(\d{4})[./](\d{2})[./](\d{2})/, '$1-$2-$3')
+    .replace(/^(\d{4})(\d{2})(\d{2})(?=\D|$)/, '$1-$2-$3')
+    .replace(' ', 'T');
+  if (!s.includes('T')) s += 'T00:00:00';
+  if (!/(Z|[+-]\d{2}:?\d{2})$/i.test(s)) s += 'Z';
+  const ms = Date.parse(s);
+  return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
+}
+
 export function parseCSV(file: File): Promise<OHLCVBar[]> {
   return new Promise((resolve, reject) => {
     Papa.parse(file, {
@@ -18,48 +42,21 @@ export function parseCSV(file: File): Promise<OHLCVBar[]> {
         try {
           const rows = results.data as string[][];
           // Skip header row if present
-          const startIdx = isNaN(Number(rows[0]?.[2])) ? 1 : 0;
+          const startIdx = isNaN(Number(rows[0]?.[rows[0].length >= 7 ? 2 : 1])) ? 1 : 0;
           
           const bars: OHLCVBar[] = [];
           for (let i = startIdx; i < rows.length; i++) {
             const row = rows[i];
             if (!row || row.length < 6) continue;
 
-            let timestamp: Date | null = null;
-
-            // Try format: date, time, o, h, l, c, v (7 cols)
-            if (row.length >= 7) {
-              const dateStr = String(row[0]).trim();
-              const timeStr = String(row[1]).trim();
-              // Format: YYYYMMDD HH:MM:SS
-              if (/^\d{8}$/.test(dateStr)) {
-                const y = dateStr.slice(0, 4);
-                const m = dateStr.slice(4, 6);
-                const d = dateStr.slice(6, 8);
-                timestamp = new Date(`${y}-${m}-${d}T${timeStr}`);
-              } else {
-                timestamp = new Date(`${dateStr} ${timeStr}`);
-              }
-              const o = Number(row[2]);
-              const h = Number(row[3]);
-              const l = Number(row[4]);
-              const c = Number(row[5]);
-              const v = Number(row[6]) || 0;
-              if (timestamp && !isNaN(timestamp.getTime()) && !isNaN(o) && !isNaN(h) && !isNaN(l) && !isNaN(c)) {
-                bars.push({ time: Math.floor(timestamp.getTime() / 1000), open: o, high: h, low: l, close: c, volume: v });
-              }
-            }
-            // Try format: timestamp, o, h, l, c, v (6 cols)
-            else if (row.length >= 6) {
-              timestamp = new Date(String(row[0]).trim());
-              const o = Number(row[1]);
-              const h = Number(row[2]);
-              const l = Number(row[3]);
-              const c = Number(row[4]);
-              const v = Number(row[5]) || 0;
-              if (timestamp && !isNaN(timestamp.getTime()) && !isNaN(o) && !isNaN(h) && !isNaN(l) && !isNaN(c)) {
-                bars.push({ time: Math.floor(timestamp.getTime() / 1000), open: o, high: h, low: l, close: c, volume: v });
-              }
+            // 7+ columns: date, time, O, H, L, C, V — otherwise: timestamp, O, H, L, C, V
+            const split = row.length >= 7;
+            const time = split
+              ? parseTimestamp(String(row[0]), String(row[1]))
+              : parseTimestamp(String(row[0]));
+            const [o, h, l, c, v] = (split ? row.slice(2, 7) : row.slice(1, 6)).map(Number);
+            if (time != null && !isNaN(o) && !isNaN(h) && !isNaN(l) && !isNaN(c)) {
+              bars.push({ time, open: o, high: h, low: l, close: c, volume: v || 0 });
             }
           }
 

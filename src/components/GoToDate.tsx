@@ -3,9 +3,15 @@ import { Calendar, Clock, X } from 'lucide-react';
 import type { OHLCVBar } from '@/lib/csvParser';
 
 interface GoToDateProps {
-  bars: OHLCVBar[];
-  currentBarIndex: number;
-  onSeek: (barIndex: number) => void;
+  /** Base bars (UTC seconds). */
+  raw: OHLCVBar[];
+  /** Number of base bars currently revealed. */
+  position: number;
+  /** Display timezone offset in hours; the date/time inputs are in this zone. */
+  tzOffset: number;
+  onSeek: (position: number) => void;
+  /** Seek to the first bar at or after this UTC time. */
+  onSeekTime: (unixSeconds: number) => void;
 }
 
 interface TradingSession {
@@ -22,55 +28,37 @@ const SESSIONS: TradingSession[] = [
   { name: 'New York', startHour: 13, endHour: 22, color: 'hsl(var(--long))' },
 ];
 
-export function GoToDate({ bars, currentBarIndex, onSeek }: GoToDateProps) {
+const DAY = 86400;
+
+export function GoToDate({ raw, position, tzOffset, onSeek, onSeekTime }: GoToDateProps) {
   const [showPanel, setShowPanel] = useState(false);
   const [dateStr, setDateStr] = useState('');
   const [timeStr, setTimeStr] = useState('00:00');
 
+  const toLocalIso = (unix: number) => new Date((unix + tzOffset * 3600) * 1000).toISOString().split('T')[0];
   const dateRange = useMemo(() => {
-    if (bars.length === 0) return { min: '', max: '' };
-    const minDate = new Date(bars[0].time * 1000);
-    const maxDate = new Date(bars[bars.length - 1].time * 1000);
-    return {
-      min: minDate.toISOString().split('T')[0],
-      max: maxDate.toISOString().split('T')[0],
-    };
-  }, [bars]);
+    if (raw.length === 0) return { min: '', max: '' };
+    return { min: toLocalIso(raw[0].time), max: toLocalIso(raw[raw.length - 1].time) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [raw, tzOffset]);
+
+  const currentTime = raw[Math.max(0, position - 1)]?.time ?? 0;
 
   const handleGoTo = () => {
     if (!dateStr) return;
-    const target = new Date(`${dateStr}T${timeStr}:00`).getTime() / 1000;
-    // Find nearest bar
-    let nearest = 0;
-    let minDiff = Infinity;
-    for (let i = 0; i < bars.length; i++) {
-      const diff = Math.abs(bars[i].time - target);
-      if (diff < minDiff) {
-        minDiff = diff;
-        nearest = i;
-      }
-    }
-    onSeek(nearest + 1); // bar index is 1-based
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const [hh, mm] = timeStr.split(':').map(Number);
+    const localAsUtc = Date.UTC(y, m - 1, d, hh || 0, mm || 0) / 1000;
+    onSeekTime(localAsUtc - tzOffset * 3600);
     setShowPanel(false);
   };
 
   const jumpToSession = (session: TradingSession) => {
-    // Find next occurrence of session start from current bar
-    const currentTime = bars[Math.min(currentBarIndex - 1, bars.length - 1)]?.time || 0;
-    for (let i = currentBarIndex; i < bars.length; i++) {
-      const d = new Date(bars[i].time * 1000);
-      const hour = d.getUTCHours();
-      if (hour === session.startHour) {
-        onSeek(i + 1);
-        setShowPanel(false);
-        return;
-      }
-    }
-    // Wrap around
-    for (let i = 0; i < currentBarIndex; i++) {
-      const d = new Date(bars[i].time * 1000);
-      const hour = d.getUTCHours();
-      if (hour === session.startHour) {
+    // First bar of the next session open after the current position.
+    for (let i = position; i < raw.length; i++) {
+      const hour = new Date(raw[i].time * 1000).getUTCHours();
+      const prevHour = i > 0 ? new Date(raw[i - 1].time * 1000).getUTCHours() : -1;
+      if (hour === session.startHour && prevHour !== session.startHour) {
         onSeek(i + 1);
         setShowPanel(false);
         return;
@@ -154,10 +142,15 @@ export function GoToDate({ bars, currentBarIndex, onSeek }: GoToDateProps) {
             <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Quick Nav</div>
             <div className="flex gap-1.5">
               <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(1)}>Start</button>
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(Math.floor(bars.length / 4))}>25%</button>
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(Math.floor(bars.length / 2))}>50%</button>
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(Math.floor(bars.length * 0.75))}>75%</button>
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(bars.length)}>End</button>
+              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(Math.floor(raw.length / 4))}>25%</button>
+              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(Math.floor(raw.length / 2))}>50%</button>
+              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(Math.floor(raw.length * 0.75))}>75%</button>
+              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(raw.length)}>End</button>
+            </div>
+            <div className="flex gap-1.5 mt-1.5">
+              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeekTime(currentTime - DAY)}>−1 day</button>
+              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeekTime(currentTime + DAY)}>+1 day</button>
+              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeekTime(currentTime + 7 * DAY)}>+1 week</button>
             </div>
           </div>
         </div>

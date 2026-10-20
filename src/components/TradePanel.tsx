@@ -7,10 +7,13 @@ interface TradePanelProps {
   onPlaceOrder: (side: OrderSide, size: number, sl?: number, tp?: number) => void;
   onCloseOrder: (orderId: string) => void;
   openOrders: { id: string; side: OrderSide; fillPrice?: number; stopLoss?: number; takeProfit?: number; size: number; unrealizedPnl: number }[];
+  pendingOrders?: { id: string; side: OrderSide; limitPrice?: number; stopLoss?: number; takeProfit?: number; size: number }[];
+  onCancelOrder?: (orderId: string) => void;
+  onCloseAll?: () => void;
   startingBalance: number;
 }
 
-export function TradePanel({ currentPrice, onPlaceOrder, onCloseOrder, openOrders, startingBalance }: TradePanelProps) {
+export function TradePanel({ currentPrice, onPlaceOrder, onCloseOrder, openOrders, pendingOrders = [], onCancelOrder, onCloseAll, startingBalance }: TradePanelProps) {
   const [size, setSize] = useState(1);
   const [slPips, setSlPips] = useState(20);
   const [tpPips, setTpPips] = useState(40);
@@ -280,8 +283,13 @@ export function TradePanel({ currentPrice, onPlaceOrder, onCloseOrder, openOrder
 
       {/* Open Orders */}
       <div className="flex-1 overflow-y-auto">
-        <div className="px-3 py-2 text-[10px] text-muted-foreground uppercase tracking-wider border-b border-border">
-          Open Positions ({openOrders.length})
+        <div className="px-3 py-2 text-[10px] text-muted-foreground uppercase tracking-wider border-b border-border flex items-center justify-between">
+          <span>Open Positions ({openOrders.length})</span>
+          {onCloseAll && openOrders.length > 1 && (
+            <button onClick={onCloseAll} className="normal-case text-[10px] text-muted-foreground hover:text-destructive transition-colors">
+              Close all
+            </button>
+          )}
         </div>
         {openOrders.length === 0 ? (
           <div className="p-4 text-center text-xs text-muted-foreground">No open positions</div>
@@ -310,6 +318,37 @@ export function TradePanel({ currentPrice, onPlaceOrder, onCloseOrder, openOrder
               </div>
             </div>
           ))
+        )}
+
+        {pendingOrders.length > 0 && (
+          <>
+            <div className="px-3 py-2 text-[10px] text-muted-foreground uppercase tracking-wider border-y border-border">
+              Pending Orders ({pendingOrders.length})
+            </div>
+            {pendingOrders.map(order => (
+              <div key={order.id} className="px-3 py-2 border-b border-border hover:bg-muted/30 group">
+                <div className="flex items-center justify-between mb-1">
+                  <span className={`text-xs font-semibold ${order.side === 'buy' ? 'text-long' : 'text-short'}`}>
+                    {order.side.toUpperCase()} LIMIT {order.size}
+                  </span>
+                  {onCancelOrder && (
+                    <button
+                      onClick={() => onCancelOrder(order.id)}
+                      className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"
+                      title="Cancel order"
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-3 gap-1 text-[10px] font-mono text-muted-foreground">
+                  <span>@ {order.limitPrice != null ? (order.limitPrice > 10 ? order.limitPrice.toFixed(2) : order.limitPrice.toFixed(5)) : '—'}</span>
+                  {order.stopLoss != null && <span className="text-short">SL {order.stopLoss > 10 ? order.stopLoss.toFixed(2) : order.stopLoss.toFixed(5)}</span>}
+                  {order.takeProfit != null && <span className="text-long">TP {order.takeProfit > 10 ? order.takeProfit.toFixed(2) : order.takeProfit.toFixed(5)}</span>}
+                </div>
+              </div>
+            ))}
+          </>
         )}
       </div>
     </div>
