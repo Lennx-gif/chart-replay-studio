@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Calendar, Clock, X } from 'lucide-react';
+import { Calendar, Clock, X, ChevronRight, Compass } from 'lucide-react';
 import type { OHLCVBar } from '@/lib/csvParser';
 
 interface GoToDateProps {
@@ -16,10 +16,10 @@ interface TradingSession {
 }
 
 const SESSIONS: TradingSession[] = [
-  { name: 'Sydney', startHour: 21, endHour: 6, color: 'hsl(var(--primary))' },
-  { name: 'Tokyo', startHour: 0, endHour: 9, color: 'hsl(280, 60%, 55%)' },
-  { name: 'London', startHour: 7, endHour: 16, color: 'hsl(45, 90%, 55%)' },
-  { name: 'New York', startHour: 13, endHour: 22, color: 'hsl(var(--long))' },
+  { name: 'Sydney', startHour: 21, endHour: 6, color: '#2196f3' },
+  { name: 'Tokyo', startHour: 0, endHour: 9, color: '#9c27b0' },
+  { name: 'London', startHour: 7, endHour: 16, color: '#d4a54a' },
+  { name: 'New York', startHour: 13, endHour: 22, color: '#4caf50' },
 ];
 
 export function GoToDate({ bars, currentBarIndex, onSeek }: GoToDateProps) {
@@ -39,7 +39,7 @@ export function GoToDate({ bars, currentBarIndex, onSeek }: GoToDateProps) {
 
   const handleGoTo = () => {
     if (!dateStr) return;
-    const target = new Date(`${dateStr}T${timeStr}:00`).getTime() / 1000;
+    const target = new Date(`${dateStr}T${timeStr}:00Z`).getTime() / 1000;
     // Find nearest bar
     let nearest = 0;
     let minDiff = Infinity;
@@ -55,8 +55,6 @@ export function GoToDate({ bars, currentBarIndex, onSeek }: GoToDateProps) {
   };
 
   const jumpToSession = (session: TradingSession) => {
-    // Find next occurrence of session start from current bar
-    const currentTime = bars[Math.min(currentBarIndex - 1, bars.length - 1)]?.time || 0;
     for (let i = currentBarIndex; i < bars.length; i++) {
       const d = new Date(bars[i].time * 1000);
       const hour = d.getUTCHours();
@@ -81,67 +79,81 @@ export function GoToDate({ bars, currentBarIndex, onSeek }: GoToDateProps) {
   return (
     <div className="relative">
       <button
-        className="toolbar-btn text-xs gap-1.5"
         onClick={() => setShowPanel(!showPanel)}
-        title="Go to date"
+        className={`h-8 px-2.5 rounded-md border flex items-center gap-1.5 text-xs font-medium transition-all shadow-sm select-none ${
+          showPanel
+            ? 'bg-primary/20 text-primary border-primary/50'
+            : 'bg-secondary/70 hover:bg-primary/20 text-foreground hover:text-primary border-border hover:border-primary/40'
+        }`}
+        title="Go to specific date or market session (Alt+G)"
       >
-        <Calendar size={13} />
+        <Calendar size={13} className="text-primary" />
         <span className="hidden sm:inline">Go To</span>
       </button>
 
       {showPanel && (
-        <div className="absolute left-0 top-full mt-1 z-50 w-72 bg-card border border-border rounded-lg shadow-xl overflow-hidden">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-            <span className="text-xs font-semibold text-foreground">Go to Date / Session</span>
-            <button onClick={() => setShowPanel(false)} className="text-muted-foreground hover:text-foreground">
+        <div className="absolute left-0 top-full mt-1.5 z-50 w-72 bg-card border border-border rounded-xl shadow-2xl overflow-hidden text-foreground animate-in fade-in zoom-in-95 duration-100">
+          <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-border bg-secondary/30">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-foreground">
+              <Compass size={14} className="text-primary" />
+              <span>Go to Date / Session</span>
+            </div>
+            <button
+              onClick={() => setShowPanel(false)}
+              className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            >
               <X size={14} />
             </button>
           </div>
 
           {/* Date picker */}
-          <div className="p-3 border-b border-border">
-            <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Jump to Date</div>
-            <div className="flex gap-2 mb-2">
+          <div className="p-3.5 border-b border-border/70 space-y-2">
+            <div className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">
+              Exact Historical Timestamp
+            </div>
+            <div className="flex gap-2">
               <input
                 type="date"
                 value={dateStr}
                 min={dateRange.min}
                 max={dateRange.max}
-                onChange={e => setDateStr(e.target.value)}
-                className="flex-1 bg-secondary text-secondary-foreground border border-border rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                onChange={(e) => setDateStr(e.target.value)}
+                className="flex-1 bg-secondary text-foreground border border-border rounded-md px-2.5 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
               />
               <input
                 type="time"
                 value={timeStr}
-                onChange={e => setTimeStr(e.target.value)}
-                className="w-24 bg-secondary text-secondary-foreground border border-border rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                onChange={(e) => setTimeStr(e.target.value)}
+                className="w-24 bg-secondary text-foreground border border-border rounded-md px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
               />
             </div>
             <button
               onClick={handleGoTo}
               disabled={!dateStr}
-              className="w-full toolbar-btn text-xs justify-center disabled:opacity-40"
+              className="w-full py-1.5 rounded-md text-xs font-bold bg-primary text-primary-foreground hover:bg-primary/90 glow-primary transition-all disabled:opacity-40"
             >
-              Go
+              Jump to Candle
             </button>
           </div>
 
           {/* Session shortcuts */}
-          <div className="p-3">
-            <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">
-              <Clock size={10} className="inline mr-1" />
-              Jump to Next Session
+          <div className="p-3.5 border-b border-border/70">
+            <div className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider mb-2 flex items-center gap-1">
+              <Clock size={11} className="text-primary" />
+              Jump to Market Open (UTC)
             </div>
             <div className="grid grid-cols-2 gap-1.5">
-              {SESSIONS.map(s => (
+              {SESSIONS.map((s) => (
                 <button
                   key={s.name}
                   onClick={() => jumpToSession(s)}
-                  className="toolbar-btn text-xs gap-1.5 justify-start"
+                  className="px-2.5 py-1.5 rounded-md border border-border bg-secondary/50 hover:bg-primary/20 hover:border-primary/40 text-foreground transition-all flex items-center justify-between text-xs"
                 >
-                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: s.color }} />
-                  {s.name}
-                  <span className="text-[9px] text-muted-foreground ml-auto">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: s.color }} />
+                    <span className="font-medium">{s.name}</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-muted-foreground">
                     {s.startHour.toString().padStart(2, '0')}:00
                   </span>
                 </button>
@@ -150,14 +162,30 @@ export function GoToDate({ bars, currentBarIndex, onSeek }: GoToDateProps) {
           </div>
 
           {/* Quick nav */}
-          <div className="px-3 pb-3">
-            <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Quick Nav</div>
-            <div className="flex gap-1.5">
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(1)}>Start</button>
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(Math.floor(bars.length / 4))}>25%</button>
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(Math.floor(bars.length / 2))}>50%</button>
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(Math.floor(bars.length * 0.75))}>75%</button>
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(bars.length)}>End</button>
+          <div className="p-3 bg-secondary/20">
+            <div className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider mb-1.5">
+              Timeline Seek
+            </div>
+            <div className="grid grid-cols-5 gap-1">
+              {[
+                { label: 'Start', pct: 0 },
+                { label: '25%', pct: 0.25 },
+                { label: '50%', pct: 0.5 },
+                { label: '75%', pct: 0.75 },
+                { label: 'End', pct: 1 },
+              ].map(({ label, pct }) => (
+                <button
+                  key={label}
+                  onClick={() => {
+                    const idx = Math.max(1, Math.floor(bars.length * pct));
+                    onSeek(idx);
+                    setShowPanel(false);
+                  }}
+                  className="py-1 rounded text-[11px] font-mono border border-border bg-secondary hover:bg-accent text-secondary-foreground transition-colors text-center"
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
         </div>

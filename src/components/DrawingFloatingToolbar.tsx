@@ -33,7 +33,7 @@ export function DrawingFloatingToolbar({
   const [showColors, setShowColors] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  const x = Math.max(8, Math.min(position.x, window.innerWidth - 460));
+  const x = Math.max(8, Math.min(position.x, window.innerWidth - 490));
   const y = Math.max(8, position.y);
 
   const isPosition = drawing.type === 'position_long' || drawing.type === 'position_short';
@@ -47,7 +47,7 @@ export function DrawingFloatingToolbar({
       style={{ left: x, top: y }}
     >
       {/* Main row */}
-      <div className="flex items-center gap-0.5 bg-card/95 backdrop-blur-sm border border-border rounded-lg shadow-2xl px-1.5 py-1">
+      <div className="flex items-center gap-1 bg-card/95 backdrop-blur-sm border border-border rounded-lg shadow-2xl px-2 py-1">
         {/* Label */}
         <span className="text-[9px] text-muted-foreground font-mono px-1 select-none truncate max-w-[80px]">
           {DRAWING_LABELS[drawing.type]}
@@ -63,7 +63,7 @@ export function DrawingFloatingToolbar({
         />
 
         {/* Line width */}
-        <div className="flex items-center gap-px ml-0.5">
+        <div className="flex items-center gap-0.5 ml-0.5">
           {LINE_WIDTHS.map(w => (
             <button
               key={w}
@@ -71,7 +71,7 @@ export function DrawingFloatingToolbar({
                 drawing.lineWidth === w ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
               }`}
               onClick={() => onUpdate({ ...drawing, lineWidth: w })}
-              title={`${w}px`}
+              title={w === 1 ? '1px Hairline (Ultra-thin)' : `${w}px line thickness`}
             >
               <div style={{ height: Math.max(1, w), width: 14, backgroundColor: 'currentColor', borderRadius: 1 }} />
             </button>
@@ -94,6 +94,26 @@ export function DrawingFloatingToolbar({
               {s.dash}
             </button>
           ))}
+        </div>
+
+        <div className="w-px h-4 bg-border" />
+
+        {/* Direct Opacity Slider (Hairline / Translucent) */}
+        <div className="flex items-center gap-1.5 px-2 py-0.5 bg-secondary/60 rounded border border-border/50 text-[10px] font-mono">
+          <span className="text-muted-foreground select-none text-[9px] uppercase tracking-wider" title="Make drawing thinner or translucent">
+            Opacity
+          </span>
+          <input
+            type="range"
+            min={0.1}
+            max={1}
+            step={0.05}
+            value={opacity}
+            onChange={(e) => onUpdate({ ...drawing, opacity: parseFloat(e.target.value) })}
+            className="w-16 h-1 accent-primary cursor-pointer"
+            title="Slide to make drawing thinner / more translucent"
+          />
+          <span className="text-foreground font-semibold w-7 text-right select-none">{Math.round(opacity * 100)}%</span>
         </div>
 
         <div className="w-px h-4 bg-border" />

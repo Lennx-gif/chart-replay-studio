@@ -1,9 +1,31 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
-  MousePointer, Minus, Square, TrendingUp, TrendingDown, Columns,
-  ArrowUpRight, ArrowRight, Trash2, Ruler, Type, Paintbrush,
-  Triangle, Circle, Star, GitCommitHorizontal, ArrowUpDown,
-  ChevronDown, Pin, PinOff, Info, Maximize2, Grip
+  MousePointer,
+  Minus,
+  Square,
+  TrendingUp,
+  TrendingDown,
+  Columns,
+  ArrowUpRight,
+  ArrowRight,
+  Trash2,
+  Ruler,
+  Type,
+  Paintbrush,
+  Triangle,
+  Circle,
+  Star,
+  GitCommitHorizontal,
+  ArrowUpDown,
+  Lock,
+  Unlock,
+  Eye,
+  EyeOff,
+  Magnet,
+  Maximize2,
+  Grip,
+  ChevronRight,
+  Sparkles,
 } from 'lucide-react';
 import type { DrawingType, ToolCategory } from '@/lib/drawings';
 import { ALL_TOOLS, CATEGORY_LABELS } from '@/lib/drawings';
@@ -15,177 +37,217 @@ interface ChartToolbarProps {
   drawingCount: number;
   favorites: (DrawingType | null)[];
   onToggleFavorite: (type: DrawingType | null) => void;
+  // TradingView utilities
+  magnetMode: boolean;
+  onToggleMagnet: () => void;
+  lockAllDrawings: boolean;
+  onToggleLockAll: () => void;
+  hideAllDrawings: boolean;
+  onToggleHideAll: () => void;
 }
-
-const TOOL_ICONS: Record<string, React.ReactNode> = {
-  'null': <MousePointer size={15} />,
-  'horizontal': <Minus size={15} />,
-  'vertical': <Columns size={15} />,
-  'trendline': <TrendingUp size={15} />,
-  'ray': <ArrowUpRight size={15} />,
-  'extended_line': <ArrowRight size={15} />,
-  'info_line': <Info size={15} />,
-  'rectangle': <Square size={15} />,
-  'ellipse': <Circle size={15} />,
-  'triangle': <Triangle size={15} />,
-  'fibonacci': <GitCommitHorizontal size={15} />,
-  'fib_extension': <Maximize2 size={15} />,
-  'pitchfork': <Grip size={15} />,
-  'position_long': <TrendingUp size={15} />,
-  'position_short': <TrendingDown size={15} />,
-  'measure': <Ruler size={15} />,
-  'price_range': <ArrowUpDown size={15} />,
-  'text': <Type size={15} />,
-  'brush': <Paintbrush size={15} />,
-};
 
 const CATEGORY_ICONS: Record<ToolCategory, React.ReactNode> = {
   cursor: <MousePointer size={16} />,
   lines: <TrendingUp size={16} />,
   fibonacci: <GitCommitHorizontal size={16} />,
   shapes: <Square size={16} />,
-  positions: <TrendingUp size={16} />,
+  positions: <TrendingUp size={16} className="text-long" />,
   measure: <Ruler size={16} />,
   text: <Type size={16} />,
 };
 
-const CATEGORIES: ToolCategory[] = ['cursor', 'lines', 'fibonacci', 'shapes', 'positions', 'measure', 'text'];
+const CATEGORIES: ToolCategory[] = [
+  'cursor',
+  'lines',
+  'fibonacci',
+  'shapes',
+  'positions',
+  'measure',
+  'text',
+];
 
-export function ChartToolbar({ activeTool, onToolChange, onClearDrawings, drawingCount, favorites, onToggleFavorite }: ChartToolbarProps) {
-  const [expandedCategory, setExpandedCategory] = useState<ToolCategory | null>(null);
+export function ChartToolbar({
+  activeTool,
+  onToolChange,
+  onClearDrawings,
+  drawingCount,
+  favorites,
+  onToggleFavorite,
+  magnetMode,
+  onToggleMagnet,
+  lockAllDrawings,
+  onToggleLockAll,
+  hideAllDrawings,
+  onToggleHideAll,
+}: ChartToolbarProps) {
+  const [flyoutCategory, setFlyoutCategory] = useState<ToolCategory | null>(null);
+  const flyoutRef = useRef<HTMLDivElement>(null);
+
+  // Close flyout on outside click
+  useEffect(() => {
+    const handleOutside = (e: MouseEvent) => {
+      if (flyoutRef.current && !flyoutRef.current.contains(e.target as Node)) {
+        setFlyoutCategory(null);
+      }
+    };
+    window.addEventListener('mousedown', handleOutside);
+    return () => window.removeEventListener('mousedown', handleOutside);
+  }, []);
 
   const handleCategoryClick = useCallback((cat: ToolCategory) => {
     if (cat === 'cursor') {
       onToolChange(null);
-      setExpandedCategory(null);
+      setFlyoutCategory(null);
       return;
     }
-    setExpandedCategory(prev => prev === cat ? null : cat);
+    setFlyoutCategory((prev) => (prev === cat ? null : cat));
   }, [onToolChange]);
 
-  const handleToolSelect = useCallback((type: DrawingType | null) => {
-    onToolChange(type);
-    setExpandedCategory(null);
+  const handleSelectTool = useCallback((tool: DrawingType | null) => {
+    onToolChange(tool);
+    setFlyoutCategory(null);
   }, [onToolChange]);
 
-  // Get the active tool's category to highlight the sidebar icon
   const activeCategory = activeTool
-    ? ALL_TOOLS.find(t => t.type === activeTool)?.category || null
+    ? ALL_TOOLS.find((t) => t.type === activeTool)?.category || null
     : 'cursor';
 
   return (
-    <div className="absolute left-0 top-0 bottom-0 z-30 flex" style={{ pointerEvents: 'none' }}>
-      {/* Vertical icon bar */}
-      <div className="flex flex-col bg-card/95 backdrop-blur-sm border-r border-border w-10 py-1 gap-0.5" style={{ pointerEvents: 'auto' }}>
-        {/* Favorites at top */}
-        {favorites.length > 0 && (
-          <>
-            {favorites.map(fav => {
-              const key = String(fav);
-              return (
+    <div className="absolute left-0 top-0 bottom-0 z-30 flex select-none" style={{ pointerEvents: 'none' }}>
+      {/* Main vertical sidebar */}
+      <div
+        ref={flyoutRef}
+        className="flex flex-col justify-between bg-card/95 backdrop-blur-md border-r border-border w-11 py-2 relative shadow-md"
+        style={{ pointerEvents: 'auto' }}
+      >
+        {/* Top: Tool Groups */}
+        <div className="flex flex-col gap-0.5 items-center">
+          {CATEGORIES.map((cat) => {
+            const isActive = activeCategory === cat;
+            const isFlyoutOpen = flyoutCategory === cat;
+            const categoryTools = ALL_TOOLS.filter((t) => t.category === cat);
+
+            return (
+              <div key={cat} className="relative group w-full flex justify-center">
                 <button
-                  key={key}
-                  className={`w-10 h-8 flex items-center justify-center transition-colors relative group ${
-                    activeTool === fav ? 'text-primary bg-primary/10' : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+                  onClick={() => handleCategoryClick(cat)}
+                  className={`w-9 h-8 flex items-center justify-center rounded transition-colors relative ${
+                    isActive || isFlyoutOpen
+                      ? 'text-primary bg-primary/15'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
                   }`}
-                  onClick={() => handleToolSelect(fav)}
-                  title={ALL_TOOLS.find(t => t.type === fav)?.label || 'Cursor'}
+                  title={CATEGORY_LABELS[cat]}
                 >
-                  {TOOL_ICONS[key] || <Star size={14} />}
-                  <Star size={6} className="absolute top-0.5 right-0.5 text-primary fill-primary" />
+                  {CATEGORY_ICONS[cat]}
+                  {cat !== 'cursor' && (
+                    <ChevronRight size={8} className="absolute right-0.5 bottom-0.5 text-muted-foreground/60" />
+                  )}
                 </button>
-              );
-            })}
-            <div className="mx-2 h-px bg-border" />
-          </>
-        )}
 
-        {/* Category buttons */}
-        {CATEGORIES.map(cat => {
-          const isActive = activeCategory === cat;
-          const isExpanded = expandedCategory === cat;
-          return (
-            <button
-              key={cat}
-              className={`w-10 h-9 flex items-center justify-center transition-all relative ${
-                isActive ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
-              } ${isExpanded ? 'bg-primary/10' : 'hover:bg-secondary'}`}
-              onClick={() => handleCategoryClick(cat)}
-              title={CATEGORY_LABELS[cat]}
-            >
-              {CATEGORY_ICONS[cat]}
-              {cat !== 'cursor' && (
-                <ChevronDown size={7} className={`absolute bottom-0.5 right-0.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-              )}
-            </button>
-          );
-        })}
+                {/* Submenu Flyout */}
+                {isFlyoutOpen && (
+                  <div className="absolute left-11 top-0 z-50 w-52 bg-card/95 backdrop-blur-md border border-border rounded-lg shadow-2xl py-1.5 animate-in fade-in slide-in-from-left-2 duration-150">
+                    <div className="px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-muted-foreground border-b border-border/80 flex items-center justify-between">
+                      <span>{CATEGORY_LABELS[cat]}</span>
+                    </div>
 
-        <div className="flex-1" />
+                    <div className="py-1">
+                      {categoryTools.map((tool) => {
+                        const isToolActive = activeTool === tool.type;
+                        const isFavorite = favorites.includes(tool.type);
 
-        {/* Clear all */}
-        {drawingCount > 0 && (
+                        return (
+                          <div
+                            key={String(tool.type)}
+                            className={`flex items-center justify-between px-3 py-1.5 hover:bg-secondary/70 cursor-pointer text-xs transition-colors ${
+                              isToolActive ? 'text-primary font-semibold bg-primary/10' : 'text-foreground'
+                            }`}
+                            onClick={() => handleSelectTool(tool.type)}
+                          >
+                            <div className="flex items-center gap-2 truncate">
+                              <span>{tool.label}</span>
+                              {tool.shortcut && (
+                                <kbd className="text-[9px] font-mono text-muted-foreground bg-secondary px-1 py-0.5 rounded">
+                                  {tool.shortcut}
+                                </kbd>
+                              )}
+                            </div>
+
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onToggleFavorite(tool.type);
+                              }}
+                              className={`p-1 rounded hover:scale-110 transition-transform ${
+                                isFavorite ? 'text-primary fill-primary' : 'text-muted-foreground/40 hover:text-muted-foreground'
+                              }`}
+                              title={isFavorite ? 'Remove favorite' : 'Add to favorites'}
+                            >
+                              <Star size={12} className={isFavorite ? 'fill-primary' : ''} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Bottom: Utilities & Modes */}
+        <div className="flex flex-col gap-1 items-center border-t border-border pt-2">
+          {/* Magnet Mode */}
           <button
-            className="w-10 h-9 flex items-center justify-center text-destructive hover:bg-destructive/10 transition-colors relative"
+            onClick={onToggleMagnet}
+            className={`w-9 h-8 flex items-center justify-center rounded transition-colors ${
+              magnetMode
+                ? 'text-primary bg-primary/20 shadow-sm'
+                : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+            }`}
+            title={magnetMode ? 'Magnet Mode: ON (Snaps to High/Low/Open/Close)' : 'Magnet Mode: OFF'}
+          >
+            <Magnet size={15} />
+          </button>
+
+          {/* Lock All Drawings */}
+          <button
+            onClick={onToggleLockAll}
+            className={`w-9 h-8 flex items-center justify-center rounded transition-colors ${
+              lockAllDrawings
+                ? 'text-amber bg-amber/20'
+                : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+            }`}
+            title={lockAllDrawings ? 'Unlock all drawings' : 'Lock all drawings'}
+          >
+            {lockAllDrawings ? <Lock size={15} /> : <Unlock size={15} />}
+          </button>
+
+          {/* Hide/Show All Drawings */}
+          <button
+            onClick={onToggleHideAll}
+            className={`w-9 h-8 flex items-center justify-center rounded transition-colors ${
+              hideAllDrawings
+                ? 'text-short bg-short/20'
+                : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+            }`}
+            title={hideAllDrawings ? 'Show all drawings' : 'Hide all drawings'}
+          >
+            {hideAllDrawings ? <EyeOff size={15} /> : <Eye size={15} />}
+          </button>
+
+          {/* Clear All Drawings */}
+          <button
             onClick={onClearDrawings}
-            title={`Clear all (${drawingCount})`}
+            disabled={drawingCount === 0}
+            className="w-9 h-8 flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-30 disabled:pointer-events-none"
+            title={`Clear all drawings (${drawingCount})`}
           >
             <Trash2 size={15} />
-            <span className="absolute -top-0.5 -right-0.5 bg-destructive text-destructive-foreground text-[8px] rounded-full w-3.5 h-3.5 flex items-center justify-center font-mono">
-              {drawingCount}
-            </span>
           </button>
-        )}
-      </div>
-
-      {/* Flyout panel */}
-      {expandedCategory && (
-        <div
-          className="bg-card/95 backdrop-blur-sm border-r border-border w-48 py-1 animate-in slide-in-from-left-2 duration-150 shadow-xl"
-          style={{ pointerEvents: 'auto' }}
-        >
-          <div className="px-3 py-1.5 text-[10px] text-muted-foreground uppercase tracking-widest font-semibold">
-            {CATEGORY_LABELS[expandedCategory]}
-          </div>
-          {ALL_TOOLS
-            .filter(t => t.category === expandedCategory)
-            .map(tool => {
-              const key = String(tool.type);
-              const isFav = favorites.includes(tool.type);
-              return (
-                <div key={key} className="flex items-center group">
-                  <button
-                    className={`flex-1 flex items-center gap-2.5 px-3 py-1.5 text-xs transition-colors ${
-                      activeTool === tool.type
-                        ? 'text-primary bg-primary/10'
-                        : 'text-foreground hover:bg-secondary'
-                    }`}
-                    onClick={() => handleToolSelect(tool.type)}
-                  >
-                    <span className="w-5 flex items-center justify-center opacity-70">
-                      {TOOL_ICONS[key]}
-                    </span>
-                    <span className="flex-1 text-left">{tool.label}</span>
-                    {tool.shortcut && (
-                      <span className="text-[9px] text-muted-foreground font-mono bg-secondary px-1 rounded">
-                        {tool.shortcut}
-                      </span>
-                    )}
-                  </button>
-                  <button
-                    className={`w-7 h-7 flex items-center justify-center transition-colors ${
-                      isFav ? 'text-primary' : 'text-muted-foreground/30 opacity-0 group-hover:opacity-100 hover:text-primary'
-                    }`}
-                    onClick={(e) => { e.stopPropagation(); onToggleFavorite(tool.type); }}
-                    title={isFav ? 'Remove from favorites' : 'Add to favorites'}
-                  >
-                    {isFav ? <PinOff size={11} /> : <Pin size={11} />}
-                  </button>
-                </div>
-              );
-            })}
         </div>
-      )}
+      </div>
     </div>
   );
 }

@@ -1,6 +1,12 @@
-import { supabase } from '@/integrations/supabase/client';
+import {
+  saveSession,
+  getSession,
+  listSessions,
+  deleteSession,
+  generateUUID,
+  type BacktestSession,
+} from './db/localDatabase';
 import type { Drawing } from './drawings';
-import type { Json } from '@/integrations/supabase/types';
 
 export interface SavedProject {
   id: string;
@@ -16,69 +22,53 @@ export interface SavedProject {
 }
 
 export async function listProjects(): Promise<SavedProject[]> {
-  const { data, error } = await supabase
-    .from('projects')
-    .select('*')
-    .order('updated_at', { ascending: false });
-
-  if (error) {
-    console.error('Failed to list projects:', error);
+  try {
+    const sessions = await listSessions();
+    return sessions.map((s) => ({
+      id: s.id,
+      name: s.name,
+      savedAt: s.updatedAt,
+      fileName: s.symbol || '',
+      timeframe: s.timeframe || 60,
+      tzOffset: 0,
+      currentBarIndex: 50,
+      speed: s.speed || 1,
+      drawings: s.drawings || [],
+      csvData: '',
+    }));
+  } catch (e) {
+    console.error('Failed to list local projects:', e);
     return [];
   }
-
-  return (data || []).map((p) => ({
-    id: p.id,
-    name: p.name,
-    savedAt: new Date(p.updated_at).getTime(),
-    fileName: p.symbol || '',
-    timeframe: parseInt(p.timeframe || '60', 10),
-    tzOffset: p.timezone_offset || 0,
-    currentBarIndex: p.replay_index || 0,
-    speed: p.replay_speed || 1,
-    drawings: (p.drawings as unknown as Drawing[]) || [],
-    csvData: ((p.settings as any)?.csvData as string) || '',
-  }));
 }
 
 export async function saveProject(project: SavedProject): Promise<void> {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error('Not authenticated');
-
-  const row = {
-    id: project.id,
-    user_id: user.id,
+  const session: BacktestSession = {
+    id: project.id || generateUUID(),
     name: project.name,
+    datasetId: project.id,
     symbol: project.fileName,
-    timeframe: String(project.timeframe),
-    timezone_offset: project.tzOffset,
-    replay_index: project.currentBarIndex,
-    replay_speed: project.speed,
-    drawings: project.drawings as unknown as Json,
-    settings: { csvData: project.csvData } as unknown as Json,
+    timeframe: project.timeframe,
+    currentTimestamp: Math.floor(Date.now() / 1000),
+    speed: project.speed,
+    stepMode: 'bar',
+    stepMinutes: project.timeframe,
+    dateFilter: { mode: 'all' },
+    drawings: project.drawings,
+    orders: [],
+    startingBalance: 10000,
+    notes: '',
+    createdAt: project.savedAt || Date.now(),
+    updatedAt: Date.now(),
   };
 
-  const { error } = await supabase
-    .from('projects')
-    .upsert(row, { onConflict: 'id' });
-
-  if (error) {
-    console.error('Failed to save project:', error);
-    throw error;
-  }
+  await saveSession(session);
 }
 
 export async function deleteProject(id: string): Promise<void> {
-  const { error } = await supabase
-    .from('projects')
-    .delete()
-    .eq('id', id);
-
-  if (error) {
-    console.error('Failed to delete project:', error);
-    throw error;
-  }
+  await deleteSession(id);
 }
 
 export function generateProjectId(): string {
-  return crypto.randomUUID();
+  return generateUUID();
 }

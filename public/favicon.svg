@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Rounded Background Tile with Nubian Theme Dark Background -->
+  <rect width="64" height="64" rx="14" fill="#18130e"/>
+  <rect x="1" y="1" width="62" height="62" rx="13" stroke="#3d2c18" stroke-width="2"/>
+  
+  <!-- Left Bullish Candle (Green/Gold) -->
+  <!-- Upper & Lower Wick -->
+  <line x1="20" y1="12" x2="20" y2="48" stroke="#d4a54a" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Candle Body -->
+  <rect x="15" y="20" width="10" height="20" rx="2" fill="#d4a54a"/>
+
+  <!-- Right Bearish Candle (Coral/Red) -->
+  <!-- Upper & Lower Wick -->
+  <line x1="36" y1="18" x2="36" y2="52" stroke="#e05347" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Candle Body -->
+  <rect x="31" y="26" width="10" height="18" rx="2" fill="#e05347"/>
+
+  <!-- Replay Play Symbol Overlay (Bottom Right) -->
+  <circle cx="48" cy="48" r="12" fill="#d4a54a"/>
+  <polygon points="45,42 54,48 45,54" fill="#18130e"/>
+</svg>

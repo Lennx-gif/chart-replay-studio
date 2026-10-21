@@ -9,6 +9,61 @@ export interface OHLCVBar {
   volume: number;
 }
 
+export function parseTimestampToSeconds(dateStr: string, timeStr?: string): number | null {
+  if (!dateStr) return null;
+  const trimmedDate = String(dateStr).trim();
+  const trimmedTime = timeStr ? String(timeStr).trim() : '';
+
+  // 1. Numeric unix timestamp (seconds or milliseconds)
+  const num = Number(trimmedDate);
+  if (!isNaN(num) && num > 0 && !trimmedDate.includes('-') && !trimmedDate.includes('/') && !trimmedDate.includes('.')) {
+    if (num > 1e11) {
+      return Math.floor(num / 1000);
+    }
+    if (num > 1e8) {
+      return Math.floor(num);
+    }
+  }
+
+  // 2. Compact format: YYYYMMDD with optional HH:MM:SS
+  if (/^\d{8}$/.test(trimmedDate)) {
+    const y = trimmedDate.slice(0, 4);
+    const m = trimmedDate.slice(4, 6);
+    const d = trimmedDate.slice(6, 8);
+    const timePart = trimmedTime || '00:00:00';
+    const parsed = new Date(`${y}-${m}-${d}T${timePart}Z`);
+    if (!isNaN(parsed.getTime())) return Math.floor(parsed.getTime() / 1000);
+  }
+
+  // Normalize delimiters (dots and slashes to dashes)
+  let normalizedDate = trimmedDate.replace(/[./]/g, '-');
+  const parts = normalizedDate.split('-');
+
+  if (parts.length === 3) {
+    // DD-MM-YYYY or MM-DD-YYYY where year is at end
+    if (parts[2].length === 4) {
+      normalizedDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+    } else if (parts[0].length === 4) {
+      normalizedDate = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+    }
+  }
+
+  const timePart = trimmedTime ? (trimmedTime.length === 5 ? `${trimmedTime}:00` : trimmedTime) : '00:00:00';
+  const iso = `${normalizedDate}T${timePart}Z`;
+  const d = new Date(iso);
+  if (!isNaN(d.getTime())) {
+    return Math.floor(d.getTime() / 1000);
+  }
+
+  // Fallback to standard Date
+  const fallback = new Date(trimmedTime ? `${trimmedDate} ${trimmedTime}` : trimmedDate);
+  if (!isNaN(fallback.getTime())) {
+    return Math.floor(fallback.getTime() / 1000);
+  }
+
+  return null;
+}
+
 export function parseCSV(file: File): Promise<OHLCVBar[]> {
   return new Promise((resolve, reject) => {
     Papa.parse(file, {
@@ -17,60 +72,112 @@ export function parseCSV(file: File): Promise<OHLCVBar[]> {
       complete: (results) => {
         try {
           const rows = results.data as string[][];
-          // Skip header row if present
-          const startIdx = isNaN(Number(rows[0]?.[2])) ? 1 : 0;
-          
-          const bars: OHLCVBar[] = [];
-          for (let i = startIdx; i < rows.length; i++) {
-            const row = rows[i];
-            if (!row || row.length < 6) continue;
+          if (!rows || rows.length === 0) {
+            reject(new Error('CSV file is empty'));
+            return;
+          }
 
-            let timestamp: Date | null = null;
+          // Check if first row is a header
+          const firstRow = rows[0].map((c) => String(c).trim().toLowerCase());
+          const hasHeader = firstRow.some((c) =>
+            ['date', 'time', 'timestamp', 'open', 'high', 'low', 'close', 'vol', 'volume'].some((k) => c.includes(k))
+          );
 
-            // Try format: date, time, o, h, l, c, v (7 cols)
-            if (row.length >= 7) {
-              const dateStr = String(row[0]).trim();
-              const timeStr = String(row[1]).trim();
-              // Format: YYYYMMDD HH:MM:SS
-              if (/^\d{8}$/.test(dateStr)) {
-                const y = dateStr.slice(0, 4);
-                const m = dateStr.slice(4, 6);
-                const d = dateStr.slice(6, 8);
-                timestamp = new Date(`${y}-${m}-${d}T${timeStr}`);
-              } else {
-                timestamp = new Date(`${dateStr} ${timeStr}`);
+          let dateCol = -1;
+          let timeCol = -1;
+          let openCol = -1;
+          let highCol = -1;
+          let lowCol = -1;
+          let closeCol = -1;
+          let volCol = -1;
+
+          if (hasHeader) {
+            firstRow.forEach((col, idx) => {
+              if (col === 'date' || col === 'timestamp' || col === 'datetime' || col === 'time') {
+                if (dateCol === -1) dateCol = idx;
+                else if (timeCol === -1) timeCol = idx;
+              } else if (col === 'time' && dateCol !== -1) {
+                timeCol = idx;
+              } else if (col.startsWith('open') || col === 'o') {
+                openCol = idx;
+              } else if (col.startsWith('high') || col === 'h') {
+                highCol = idx;
+              } else if (col.startsWith('low') || col === 'l') {
+                lowCol = idx;
+              } else if (col.startsWith('close') || col === 'c') {
+                closeCol = idx;
+              } else if (col.startsWith('vol') || col === 'v') {
+                volCol = idx;
               }
-              const o = Number(row[2]);
-              const h = Number(row[3]);
-              const l = Number(row[4]);
-              const c = Number(row[5]);
-              const v = Number(row[6]) || 0;
-              if (timestamp && !isNaN(timestamp.getTime()) && !isNaN(o) && !isNaN(h) && !isNaN(l) && !isNaN(c)) {
-                bars.push({ time: Math.floor(timestamp.getTime() / 1000), open: o, high: h, low: l, close: c, volume: v });
-              }
-            }
-            // Try format: timestamp, o, h, l, c, v (6 cols)
-            else if (row.length >= 6) {
-              timestamp = new Date(String(row[0]).trim());
-              const o = Number(row[1]);
-              const h = Number(row[2]);
-              const l = Number(row[3]);
-              const c = Number(row[4]);
-              const v = Number(row[5]) || 0;
-              if (timestamp && !isNaN(timestamp.getTime()) && !isNaN(o) && !isNaN(h) && !isNaN(l) && !isNaN(c)) {
-                bars.push({ time: Math.floor(timestamp.getTime() / 1000), open: o, high: h, low: l, close: c, volume: v });
-              }
+            });
+          }
+
+          // Fallback column positions if header not present or incomplete
+          const startIdx = hasHeader ? 1 : 0;
+          const defaultCols = rows[startIdx] ? rows[startIdx].length : 6;
+
+          if (dateCol === -1) {
+            if (defaultCols >= 7) {
+              dateCol = 0;
+              timeCol = 1;
+              openCol = 2;
+              highCol = 3;
+              lowCol = 4;
+              closeCol = 5;
+              volCol = 6;
+            } else {
+              dateCol = 0;
+              timeCol = -1;
+              openCol = 1;
+              highCol = 2;
+              lowCol = 3;
+              closeCol = 4;
+              volCol = defaultCols >= 6 ? 5 : -1;
             }
           }
 
-          // Sort by time
+          const bars: OHLCVBar[] = [];
+
+          for (let i = startIdx; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row || row.length < 4) continue;
+
+            const dateVal = row[dateCol];
+            const timeVal = timeCol !== -1 ? row[timeCol] : undefined;
+            const timeSec = parseTimestampToSeconds(dateVal, timeVal);
+            if (timeSec === null) continue;
+
+            const o = Number(row[openCol]);
+            const h = Number(row[highCol]);
+            const l = Number(row[lowCol]);
+            const c = Number(row[closeCol]);
+            const v = volCol !== -1 ? Number(row[volCol]) || 0 : 0;
+
+            if (!isNaN(o) && !isNaN(h) && !isNaN(l) && !isNaN(c)) {
+              bars.push({
+                time: timeSec,
+                open: o,
+                high: h,
+                low: l,
+                close: c,
+                volume: v,
+              });
+            }
+          }
+
+          // Sort by time ascending
           bars.sort((a, b) => a.time - b.time);
-          
-          // Remove duplicates
-          const unique = bars.filter((bar, i) => i === 0 || bar.time !== bars[i - 1].time);
+
+          // Deduplicate identical timestamps
+          const unique: OHLCVBar[] = [];
+          for (let i = 0; i < bars.length; i++) {
+            if (i === 0 || bars[i].time !== bars[i - 1].time) {
+              unique.push(bars[i]);
+            }
+          }
 
           if (unique.length === 0) {
-            reject(new Error('No valid OHLCV data found in CSV'));
+            reject(new Error('No valid OHLCV rows could be parsed from this CSV'));
             return;
           }
 

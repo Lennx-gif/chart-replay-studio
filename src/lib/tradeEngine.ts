@@ -32,6 +32,10 @@ export interface TradeStats {
   totalPnl: number;
   avgWin: number;
   avgLoss: number;
+  grossWin: number;
+  grossLoss: number;
+  maxDrawdown: number;
+  maxDrawdownPercent: number;
   profitFactor: number;
   bestTrade: number;
   worstTrade: number;
@@ -148,14 +152,22 @@ export function calculateStats(orders: Order[], startingBalance: number = 10000)
   const grossWin = wins.reduce((sum, o) => sum + (o.pnl || 0), 0);
   const grossLoss = Math.abs(losses.reduce((sum, o) => sum + (o.pnl || 0), 0));
 
-  // Equity curve starting from the configured balance
+  // Equity curve and max drawdown calculation
   let equity = startingBalance;
+  let peak = startingBalance;
+  let maxDD = 0;
+
   const equityCurve = closed
     .sort((a, b) => (a.closeTime || 0) - (b.closeTime || 0))
     .map(o => {
       equity += o.pnl || 0;
+      if (equity > peak) peak = equity;
+      const dd = peak - equity;
+      if (dd > maxDD) maxDD = dd;
       return { time: o.closeTime || 0, equity };
     });
+
+  const maxDrawdownPercent = peak > 0 ? (maxDD / peak) * 100 : 0;
 
   return {
     totalTrades: closed.length,
@@ -164,6 +176,10 @@ export function calculateStats(orders: Order[], startingBalance: number = 10000)
     breakeven: breakeven.length,
     winRate: closed.length > 0 ? (wins.length / closed.length) * 100 : 0,
     totalPnl,
+    grossWin,
+    grossLoss,
+    maxDrawdown: maxDD,
+    maxDrawdownPercent,
     avgWin: wins.length > 0 ? grossWin / wins.length : 0,
     avgLoss: losses.length > 0 ? grossLoss / losses.length : 0,
     profitFactor: grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0,
