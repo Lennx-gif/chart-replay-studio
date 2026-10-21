@@ -16,19 +16,22 @@ const ALL_TIMEFRAMES = [
 ];
 
 export function TimeframeSelector({ baseTimeframe, currentTimeframe, onTimeframeChange }: TimeframeSelectorProps) {
-  const availableTFs = ALL_TIMEFRAMES.filter(tf => tf.minutes >= baseTimeframe);
-
   return (
     <div className="flex items-center gap-0.5">
-      {availableTFs.map(({ minutes, label }) => (
-        <button
-          key={minutes}
-          className={`toolbar-btn !px-2 ${currentTimeframe === minutes ? 'toolbar-btn-active' : ''}`}
-          onClick={() => onTimeframeChange(minutes)}
-        >
-          {label}
-        </button>
-      ))}
+      {ALL_TIMEFRAMES.map(({ minutes, label }) => {
+        const isLower = minutes < baseTimeframe;
+        return (
+          <button
+            key={minutes}
+            className={`toolbar-btn !px-2 ${currentTimeframe === minutes ? 'toolbar-btn-active font-bold text-primary' : ''}`}
+            onClick={() => onTimeframeChange(minutes)}
+            title={isLower ? `${label} (Synthesized lower timeframe from ${baseTimeframe}m data)` : `${label} timeframe`}
+          >
+            {label}
+            {isLower && <span className="ml-0.5 text-[8px] text-primary/70">★</span>}
+          </button>
+        );
+      })}
     </div>
   );
 }

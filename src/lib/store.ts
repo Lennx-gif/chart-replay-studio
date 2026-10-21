@@ -1,7 +1,8 @@
-import { db, type BarsRecord, type DatasetRecord, type SessionRecord, type StepUnit, type ChartStyle } from './db';
+import { db, type BarsRecord, type DatasetRecord, type SessionRecord, type StepUnit, type ChartStyle, type DateRangeMode } from './db';
 import type { OHLCVBar } from './csvParser';
 import { detectBaseTimeframe } from './csvParser';
-import { DEFAULT_SPEED, DEFAULT_START_POSITION, clampPosition } from './replay';
+import { DEFAULT_SPEED, DEFAULT_START_POSITION, clampPosition, lowerBoundByTime } from './replay';
+import { getNewYorkOffset } from './timezone';
 
 /**
  * Persistence layer for datasets, sessions and settings. Everything is stored
@@ -132,6 +133,10 @@ export interface NewSessionOptions {
   startingBalance?: number;
   startPosition?: number;
   timeframe?: number;
+  leverage?: number;
+  dateRangeMode?: DateRangeMode;
+  startDate?: string;
+  endDate?: string;
 }
 
 export function defaultSessionName(dataset: DatasetRecord): string {
@@ -142,7 +147,21 @@ export function defaultSessionName(dataset: DatasetRecord): string {
 export async function createSession(opts: NewSessionOptions): Promise<SessionRecord> {
   const { dataset } = opts;
   const now = Date.now();
-  const start = clampPosition(opts.startPosition ?? DEFAULT_START_POSITION, dataset.barCount);
+  let start = clampPosition(opts.startPosition ?? DEFAULT_START_POSITION, dataset.barCount);
+
+  if (opts.startDate) {
+    try {
+      const bars = await loadBars(dataset.id);
+      const startSec = Math.floor(new Date(opts.startDate + 'T00:00:00Z').getTime() / 1000);
+      const idx = lowerBoundByTime(bars, startSec);
+      if (idx >= 0 && idx < bars.length) {
+        start = clampPosition(idx + 1, dataset.barCount);
+      }
+    } catch {
+      // fallback to start
+    }
+  }
+
   const balance = opts.startingBalance ?? (await getSetting<number>('defaultStartingBalance', DEFAULT_STARTING_BALANCE));
   const session: SessionRecord = {
     id: crypto.randomUUID(),
@@ -157,11 +176,15 @@ export async function createSession(opts: NewSessionOptions): Promise<SessionRec
     speed: DEFAULT_SPEED,
     stepUnit: 'bar' as StepUnit,
     timeframe: opts.timeframe ?? dataset.baseTimeframe,
-    tzOffset: 0,
+    tzOffset: getNewYorkOffset(now / 1000),
     chartStyle: 'candles' as ChartStyle,
     pauseOnTradeEvents: true,
     bookmarks: [],
     startingBalance: balance,
+    leverage: opts.leverage ?? 1,
+    dateRangeMode: opts.dateRangeMode ?? 'all',
+    startDate: opts.startDate,
+    endDate: opts.endDate,
     orders: [],
     drawings: [],
     notes: '',

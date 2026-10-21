@@ -37,6 +37,7 @@ export interface BarsRecord {
 
 export type StepUnit = 'bar' | 'candle';
 export type ChartStyle = 'candles' | 'line' | 'bars' | 'area';
+export type DateRangeMode = 'daily' | 'monthly' | 'yearly' | 'all';
 
 export interface Bookmark {
   id: string;
@@ -71,9 +72,15 @@ export interface SessionRecord {
 
   // Trading + analysis state
   startingBalance: number;
+  leverage?: number;
   orders: Order[];
   drawings: Drawing[];
   notes: string;
+
+  // Date range management ("Data Times")
+  dateRangeMode?: DateRangeMode;
+  startDate?: string;
+  endDate?: string;
 
   // Denormalised progress for the session list
   totalBars: number;

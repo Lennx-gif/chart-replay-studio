@@ -7,6 +7,7 @@ import {
 } from '@/lib/replay';
 import {
   createLimitOrder, createMarketOrder, processBar, rewindOrders, type Order, type OrderSide,
+  getContractMultiplier, getPipSize,
 } from '@/lib/tradeEngine';
 
 const isActive = (o: Order) => o.status === 'pending' || o.status === 'filled';
@@ -174,11 +175,30 @@ export function useReplayEngine(raw: OHLCVBar[], session: SessionRecord) {
   const closeAtMarket = useCallback((o: Order, bar: OHLCVBar): Order => {
     const entry = o.fillPrice ?? 0;
     const diff = o.side === 'buy' ? bar.close - entry : entry - bar.close;
+    const mult = o.contractMultiplier ?? getContractMultiplier(entry);
+    const pip = getPipSize(entry);
     return {
-      ...o, status: 'closed', closePrice: bar.close, closeTime: bar.time, closeReason: 'manual',
-      pnl: diff * o.size, pnlPips: diff * 10000,
+      ...o,
+      status: 'closed',
+      closePrice: bar.close,
+      closeTime: bar.time,
+      closeReason: 'manual',
+      pnl: diff * o.size * mult,
+      pnlPips: diff / pip,
     };
   }, []);
+
+  const updateOrder = useCallback(
+    (orderId: string, updates: { stopLoss?: number; takeProfit?: number; limitPrice?: number }) => {
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, ...updates } : o)));
+      live.current = {
+        ...live.current,
+        orders: live.current.orders.map((o) => (o.id === orderId ? { ...o, ...updates } : o)),
+      };
+      toast.success('Order levels updated');
+    },
+    []
+  );
 
   const closeOrder = useCallback((orderId: string) => {
     const bar = raw[live.current.position - 1];
@@ -234,7 +254,7 @@ export function useReplayEngine(raw: OHLCVBar[], session: SessionRecord) {
     total, position, candles, index, orders, isPlaying, speed, stepUnit, timeframe, pauseOnTradeEvents, bookmarks, startPosition,
     setSpeed, setStepUnit, setTimeframe, setPauseOnTradeEvents, setStartPosition, setIsPlaying,
     moveTo, step, seek, seekToTime, restart, togglePlay,
-    placeMarket, placePending, closeOrder, closeAll, cancelOrder,
+    placeMarket, placePending, closeOrder, closeAll, cancelOrder, updateOrder,
     addBookmark, removeBookmark, renameBookmark, jumpBookmark,
   };
 }

@@ -1,6 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { makeBars } from '@/test/helpers';
-import { createLimitOrder, createMarketOrder, processBars, rewindOrders } from './tradeEngine';
+import {
+  createLimitOrder,
+  createMarketOrder,
+  processBars,
+  rewindOrders,
+  getContractMultiplier,
+  getPipSize,
+  calculateRiskPositionSize,
+  closeOrder,
+} from './tradeEngine';
 
 const bars = makeBars(20, 5);
 
@@ -12,6 +21,39 @@ describe('processBars', () => {
     expect(done.status).toBe('closed');
     expect(done.closeReason).toBe('tp');
     expect(done.closeTime).toBe(bars[3].time);
+  });
+
+  it('calculates expected pip movements and standard Forex lot profit', () => {
+    // 1 standard lot of EURUSD at 1.0800 with TP at 1.0820 (20 pips)
+    const fxBar: any = { time: 1000, open: 1.0805, high: 1.0825, low: 1.0795, close: 1.0822, volume: 100 };
+    const order = createMarketOrder('buy', 1.0800, 900, 1.0, 1.0780, 1.0820);
+    const [closed] = processBars([fxBar], [order]);
+
+    expect(closed.status).toBe('closed');
+    expect(closed.closeReason).toBe('tp');
+    // 20 pips * 1.0 lot * 100,000 = $200.00
+    expect(closed.pnl).toBeCloseTo(200, 1);
+    expect(closed.pnlPips).toBeCloseTo(20, 1);
+  });
+});
+
+describe('calculateRiskPositionSize', () => {
+  it('calculates position size for 1% risk on $10,000 balance with 20 pip SL', () => {
+    // Balance $10,000, 1% risk = $100.
+    // At EURUSD (price 1.08), 1 pip on 1 lot = $10.
+    // 20 pips * $10 = $200 risk per 1.0 lot.
+    // $100 / $200 = 0.50 lots.
+    const result = calculateRiskPositionSize(10000, { mode: 'percent', value: 1.0 }, 20, 1.0850);
+    expect(result.riskAmount).toBe(100);
+    expect(result.size).toBe(0.5);
+    expect(result.pipValue).toBe(10);
+  });
+
+  it('calculates position size for fixed $250 cash risk with 50 pip SL', () => {
+    // $250 risk / (50 pips * $10/pip) = 0.50 lots
+    const result = calculateRiskPositionSize(25000, { mode: 'cash', value: 250 }, 50, 1.0850);
+    expect(result.riskAmount).toBe(250);
+    expect(result.size).toBe(0.5);
   });
 });
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { makeBars } from '@/test/helpers';
 import {
-  buildTimeframeIndex, candleIndexForRaw, detectPricePrecision, clampPosition, lowerBoundByTime, playbackTick, stepPosition, visibleCandles,
+  buildTimeframeIndex, candleIndexForRaw, detectPricePrecision, clampPosition, lowerBoundByTime, playbackTick, stepPosition, visibleCandles, decomposeBar,
 } from './replay';
 
 // 5-minute bars; a 15m candle holds 3 base bars.
@@ -27,6 +27,29 @@ describe('visibleCandles', () => {
 
   it('is empty at position 0', () => {
     expect(visibleCandles(raw, buildTimeframeIndex(raw, 15), 0)).toEqual([]);
+  });
+});
+
+describe('lower timeframe synthesis', () => {
+  it('decomposes parent bar preserving open, close, high, low, and volume invariants', () => {
+    const parent = { time: 100000, open: 1.1000, high: 1.1080, low: 1.0950, close: 1.1050, volume: 400 };
+    const subBars = decomposeBar(parent, 4, 15);
+    expect(subBars).toHaveLength(4);
+    expect(subBars[0].open).toBe(parent.open);
+    expect(subBars[3].close).toBe(parent.close);
+    expect(Math.max(...subBars.map((b) => b.high))).toBe(parent.high);
+    expect(Math.min(...subBars.map((b) => b.low))).toBe(parent.low);
+    const sumVol = subBars.reduce((s, b) => s + b.volume, 0);
+    expect(sumVol).toBeCloseTo(parent.volume);
+  });
+
+  it('builds lower timeframe index when minutes < baseTimeframe', () => {
+    // raw has 30 5m bars. Request 1m bars (subRatio = 5)
+    const idx = buildTimeframeIndex(raw, 1);
+    expect(idx.subRatio).toBe(5);
+    expect(idx.bars).toHaveLength(30 * 5);
+    const visible = visibleCandles(raw, idx, 2);
+    expect(visible).toHaveLength(2 * 5);
   });
 });
 

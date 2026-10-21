@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Calendar, Clock, X } from 'lucide-react';
+import { Calendar, Clock, X, Play } from 'lucide-react';
 import type { OHLCVBar } from '@/lib/csvParser';
 
 interface GoToDateProps {
@@ -69,67 +69,78 @@ export function GoToDate({ raw, position, tzOffset, onSeek, onSeekTime }: GoToDa
   return (
     <div className="relative">
       <button
-        className="toolbar-btn text-xs gap-1.5"
+        className={`toolbar-btn text-xs gap-1.5 transition-all ${
+          showPanel ? 'bg-primary/20 text-primary border-primary/50' : ''
+        }`}
         onClick={() => setShowPanel(!showPanel)}
-        title="Go to date"
+        title="Go to date / market session"
       >
-        <Calendar size={13} />
+        <Calendar size={13} className={showPanel ? 'text-primary' : 'text-muted-foreground'} />
         <span className="hidden sm:inline">Go To</span>
       </button>
 
       {showPanel && (
-        <div className="absolute left-0 top-full mt-1 z-50 w-72 bg-card border border-border rounded-lg shadow-xl overflow-hidden">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-            <span className="text-xs font-semibold text-foreground">Go to Date / Session</span>
-            <button onClick={() => setShowPanel(false)} className="text-muted-foreground hover:text-foreground">
+        <div className="absolute left-0 top-full mt-1.5 z-50 w-76 bg-card/95 backdrop-blur-md border border-border rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-100">
+          <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-border bg-secondary/30">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              <Calendar size={13} className="text-primary" />
+              <span>Go to Date / Session</span>
+            </div>
+            <button
+              onClick={() => setShowPanel(false)}
+              className="text-muted-foreground hover:text-foreground p-0.5 rounded transition-colors"
+            >
               <X size={14} />
             </button>
           </div>
 
           {/* Date picker */}
-          <div className="p-3 border-b border-border">
-            <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Jump to Date</div>
-            <div className="flex gap-2 mb-2">
+          <div className="p-3.5 border-b border-border space-y-2.5">
+            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+              Jump to Exact Date & Time
+            </div>
+            <div className="flex gap-2">
               <input
                 type="date"
                 value={dateStr}
                 min={dateRange.min}
                 max={dateRange.max}
-                onChange={e => setDateStr(e.target.value)}
-                className="flex-1 bg-secondary text-secondary-foreground border border-border rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                onChange={(e) => setDateStr(e.target.value)}
+                className="flex-1 bg-secondary/80 text-foreground border border-border rounded-lg px-2.5 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary transition-all"
               />
               <input
                 type="time"
                 value={timeStr}
-                onChange={e => setTimeStr(e.target.value)}
-                className="w-24 bg-secondary text-secondary-foreground border border-border rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                onChange={(e) => setTimeStr(e.target.value)}
+                className="w-24 bg-secondary/80 text-foreground border border-border rounded-lg px-2.5 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary transition-all"
               />
             </div>
             <button
               onClick={handleGoTo}
               disabled={!dateStr}
-              className="w-full toolbar-btn text-xs justify-center disabled:opacity-40"
+              className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-all shadow-sm shadow-primary/25 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer active:scale-[0.99]"
             >
-              Go
+              <Play size={12} className="fill-current" />
+              <span>Jump to Replay Time</span>
             </button>
           </div>
 
           {/* Session shortcuts */}
-          <div className="p-3">
-            <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">
-              <Clock size={10} className="inline mr-1" />
-              Jump to Next Session
+          <div className="p-3.5 border-b border-border">
+            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1">
+              <Clock size={11} className="text-primary" />
+              <span>Jump to Next Market Session</span>
             </div>
-            <div className="grid grid-cols-2 gap-1.5">
-              {SESSIONS.map(s => (
+            <div className="grid grid-cols-2 gap-2">
+              {SESSIONS.map((s) => (
                 <button
                   key={s.name}
                   onClick={() => jumpToSession(s)}
-                  className="toolbar-btn text-xs gap-1.5 justify-start"
+                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-secondary/40 hover:bg-secondary border border-border/60 hover:border-primary/50 text-foreground text-xs transition-all text-left group"
                 >
-                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: s.color }} />
-                  {s.name}
-                  <span className="text-[9px] text-muted-foreground ml-auto">
+                  <div className="w-2 h-2 rounded-full shrink-0 group-hover:scale-125 transition-transform" style={{ backgroundColor: s.color }} />
+                  <span className="font-medium truncate">{s.name}</span>
+                  <span className="text-[10px] font-mono text-muted-foreground ml-auto">
                     {s.startHour.toString().padStart(2, '0')}:00
                   </span>
                 </button>
@@ -138,19 +149,21 @@ export function GoToDate({ raw, position, tzOffset, onSeek, onSeekTime }: GoToDa
           </div>
 
           {/* Quick nav */}
-          <div className="px-3 pb-3">
-            <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Quick Nav</div>
-            <div className="flex gap-1.5">
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(1)}>Start</button>
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(Math.floor(raw.length / 4))}>25%</button>
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(Math.floor(raw.length / 2))}>50%</button>
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(Math.floor(raw.length * 0.75))}>75%</button>
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeek(raw.length)}>End</button>
+          <div className="p-3.5 space-y-2">
+            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+              Quick Timeline Jumps
             </div>
-            <div className="flex gap-1.5 mt-1.5">
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeekTime(currentTime - DAY)}>−1 day</button>
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeekTime(currentTime + DAY)}>+1 day</button>
-              <button className="toolbar-btn text-xs flex-1" onClick={() => onSeekTime(currentTime + 7 * DAY)}>+1 week</button>
+            <div className="grid grid-cols-5 gap-1.5">
+              <button className="py-1 px-1.5 bg-secondary/50 hover:bg-secondary text-foreground text-[10px] font-mono rounded-md border border-border/50 text-center transition-colors" onClick={() => onSeek(1)}>Start</button>
+              <button className="py-1 px-1.5 bg-secondary/50 hover:bg-secondary text-foreground text-[10px] font-mono rounded-md border border-border/50 text-center transition-colors" onClick={() => onSeek(Math.floor(raw.length / 4))}>25%</button>
+              <button className="py-1 px-1.5 bg-secondary/50 hover:bg-secondary text-foreground text-[10px] font-mono rounded-md border border-border/50 text-center transition-colors" onClick={() => onSeek(Math.floor(raw.length / 2))}>50%</button>
+              <button className="py-1 px-1.5 bg-secondary/50 hover:bg-secondary text-foreground text-[10px] font-mono rounded-md border border-border/50 text-center transition-colors" onClick={() => onSeek(Math.floor(raw.length * 0.75))}>75%</button>
+              <button className="py-1 px-1.5 bg-secondary/50 hover:bg-secondary text-foreground text-[10px] font-mono rounded-md border border-border/50 text-center transition-colors" onClick={() => onSeek(raw.length)}>End</button>
+            </div>
+            <div className="grid grid-cols-3 gap-1.5 pt-0.5">
+              <button className="py-1 px-2 bg-secondary/40 hover:bg-secondary text-foreground text-[10px] font-mono rounded-md border border-border/40 text-center transition-colors" onClick={() => onSeekTime(currentTime - DAY)}>−1 Day</button>
+              <button className="py-1 px-2 bg-secondary/40 hover:bg-secondary text-foreground text-[10px] font-mono rounded-md border border-border/40 text-center transition-colors" onClick={() => onSeekTime(currentTime + DAY)}>+1 Day</button>
+              <button className="py-1 px-2 bg-secondary/40 hover:bg-secondary text-foreground text-[10px] font-mono rounded-md border border-border/40 text-center transition-colors" onClick={() => onSeekTime(currentTime + 7 * DAY)}>+1 Week</button>
             </div>
           </div>
         </div>

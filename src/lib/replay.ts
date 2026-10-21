@@ -1,4 +1,4 @@
-import type { OHLCVBar } from './csvParser';
+import { detectBaseTimeframe, type OHLCVBar } from './csvParser';
 
 /**
  * Replay model
@@ -8,23 +8,125 @@ import type { OHLCVBar } from './csvParser';
  * are aggregated from the revealed base bars only, so the newest candle on a
  * 1H chart is a partially formed candle — exactly what you would have seen
  * live — and nothing from the future leaks into any timeframe.
+ * Lower timeframes are synthesized deterministically from parent base bars.
  */
 
 export interface TimeframeIndex {
   /** Timeframe in minutes. */
   minutes: number;
-  /** Fully aggregated candles over the whole dataset. */
+  /** Fully aggregated or synthesized candles over the whole dataset. */
   bars: OHLCVBar[];
   /** rawStart[i] = index of the first base bar in candle i; rawStart[n] = N. */
   rawStart: number[];
+  /** subRatio > 1 when minutes < baseTimeframe */
+  subRatio?: number;
 }
 
-/** Aggregate base bars into candles of `minutes`, remembering where each begins. */
+/**
+ * Simple pseudo-random number generator seeded by an integer.
+ * Produces deterministic floats in [0, 1).
+ */
+function seededRandom(seed: number): () => number {
+  let s = Math.abs(seed) % 2147483647;
+  if (s === 0) s = 123456789;
+  return () => {
+    s = (s * 16807) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
+}
+
+/**
+ * Decomposes a parent base bar into `count` lower-timeframe sub-bars deterministically.
+ * Guarantees:
+ *  - First sub-bar open = parent.open
+ *  - Last sub-bar close = parent.close
+ *  - Max across all sub-bar highs = parent.high
+ *  - Min across all sub-bar lows = parent.low
+ *  - Sum of sub-bar volumes = parent.volume
+ */
+export function decomposeBar(parent: OHLCVBar, count: number, targetMinutes: number): OHLCVBar[] {
+  if (count <= 1) return [parent];
+
+  const targetSec = Math.max(1, Math.round(targetMinutes * 60));
+  const rand = seededRandom(parent.time);
+  const subBars: OHLCVBar[] = [];
+
+  const isBull = parent.close >= parent.open;
+  const lowIdx = isBull ? Math.min(Math.floor(count * 0.25), count - 2) : Math.max(Math.floor(count * 0.75), 1);
+  const highIdx = isBull ? Math.max(Math.floor(count * 0.75), 1) : Math.min(Math.floor(count * 0.25), count - 2);
+
+  const totalRange = Math.max(0.00001, parent.high - parent.low);
+  const priceStep = (parent.close - parent.open) / count;
+  let curPrice = parent.open;
+  const subVol = parent.volume / count;
+
+  for (let i = 0; i < count; i++) {
+    const subTime = parent.time + i * targetSec;
+    const subOpen = curPrice;
+    let subClose = i === count - 1 ? parent.close : subOpen + priceStep + (rand() - 0.5) * totalRange * 0.2;
+
+    // Clamp subClose inside parent extremes
+    subClose = Math.max(parent.low, Math.min(parent.high, subClose));
+
+    let subHigh = Math.max(subOpen, subClose) + rand() * totalRange * 0.15;
+    let subLow = Math.min(subOpen, subClose) - rand() * totalRange * 0.15;
+
+    // Anchor the parent high and low
+    if (i === highIdx) subHigh = parent.high;
+    if (i === lowIdx) subLow = parent.low;
+
+    subHigh = Math.max(subHigh, subOpen, subClose);
+    subLow = Math.min(subLow, subOpen, subClose);
+    subHigh = Math.min(parent.high, subHigh);
+    subLow = Math.max(parent.low, subLow);
+
+    subBars.push({
+      time: subTime,
+      open: subOpen,
+      high: subHigh,
+      low: subLow,
+      close: subClose,
+      volume: subVol,
+    });
+    curPrice = subClose;
+  }
+
+  // Ensure exact extreme invariants
+  let currentMax = -Infinity;
+  let currentMin = Infinity;
+  for (const sb of subBars) {
+    if (sb.high > currentMax) currentMax = sb.high;
+    if (sb.low < currentMin) currentMin = sb.low;
+  }
+  if (currentMax < parent.high && subBars[highIdx]) subBars[highIdx].high = parent.high;
+  if (currentMin > parent.low && subBars[lowIdx]) subBars[lowIdx].low = parent.low;
+
+  return subBars;
+}
+
+/** Aggregate or synthesize base bars into candles of `minutes`, remembering where each begins. */
 export function buildTimeframeIndex(raw: OHLCVBar[], minutes: number): TimeframeIndex {
   const bars: OHLCVBar[] = [];
   const rawStart: number[] = [];
   if (raw.length === 0) return { minutes, bars, rawStart: [0] };
 
+  const baseMinutes = detectBaseTimeframe(raw);
+
+  // Case 1: minutes < baseMinutes -> Lower Timeframe Synthesis
+  if (minutes < baseMinutes) {
+    const subRatio = Math.max(2, Math.round(baseMinutes / minutes));
+    for (let i = 0; i < raw.length; i++) {
+      const sub = decomposeBar(raw[i], subRatio, minutes);
+      for (let j = 0; j < sub.length; j++) {
+        bars.push(sub[j]);
+        rawStart.push(i);
+      }
+    }
+    rawStart.push(raw.length);
+    return { minutes, bars, rawStart, subRatio };
+  }
+
+  // Case 2: Standard higher or equal timeframe aggregation
   const intervalSec = Math.max(1, Math.round(minutes * 60));
   let bucket = -1;
   let cur: OHLCVBar | null = null;
@@ -51,6 +153,10 @@ export function buildTimeframeIndex(raw: OHLCVBar[], minutes: number): Timeframe
 
 /** Index of the candle containing base bar `rawIdx` (binary search). */
 export function candleIndexForRaw(index: TimeframeIndex, rawIdx: number): number {
+  if (index.subRatio && index.subRatio > 1) {
+    return Math.max(0, Math.min(rawIdx * index.subRatio, index.bars.length - 1));
+  }
+
   const { rawStart } = index;
   let lo = 0;
   let hi = rawStart.length - 2; // last real candle
@@ -64,12 +170,17 @@ export function candleIndexForRaw(index: TimeframeIndex, rawIdx: number): number
 }
 
 /**
- * Candles visible when `position` base bars are revealed. The final candle only
- * aggregates the revealed base bars.
+ * Candles visible when `position` base bars are revealed.
  */
 export function visibleCandles(raw: OHLCVBar[], index: TimeframeIndex, position: number): OHLCVBar[] {
   const pos = Math.max(0, Math.min(position, raw.length));
   if (pos === 0) return [];
+
+  if (index.subRatio && index.subRatio > 1) {
+    const count = pos * index.subRatio;
+    return index.bars.slice(0, count);
+  }
+
   const last = candleIndexForRaw(index, pos - 1);
   const out = index.bars.slice(0, last);
 
@@ -111,6 +222,10 @@ export function stepPosition(
 ): number {
   if (total === 0) return 0;
   if (unit === 'bar' || index.minutes <= 0) {
+    return clampPosition(position + count, total);
+  }
+
+  if (index.subRatio && index.subRatio > 1) {
     return clampPosition(position + count, total);
   }
 

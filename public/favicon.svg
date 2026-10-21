@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Rounded Background -->
+  <rect width="64" height="64" rx="14" fill="#18130e"/>
+  <rect x="1" y="1" width="62" height="62" rx="13" stroke="#d4a54a" stroke-opacity="0.3" stroke-width="2"/>
+
+  <!-- Bullish Gold Candlestick -->
+  <line x1="22" y1="12" x2="22" y2="52" stroke="#d4a54a" stroke-width="2.5" stroke-linecap="round"/>
+  <rect x="17" y="22" width="10" height="20" rx="2" fill="#d4a54a"/>
+
+  <!-- Bearish Coral Candlestick -->
+  <line x1="42" y1="14" x2="42" y2="46" stroke="#e05347" stroke-width="2.5" stroke-linecap="round"/>
+  <rect x="37" y="24" width="10" height="14" rx="2" fill="#e05347"/>
+
+  <!-- Replay Circular Arrow Badge -->
+  <circle cx="48" cy="46" r="12" fill="#18130e" stroke="#d4a54a" stroke-width="2"/>
+  <!-- Play triangle inside badge -->
+  <polygon points="46,41 53,46 46,51" fill="#d4a54a"/>
+</svg>

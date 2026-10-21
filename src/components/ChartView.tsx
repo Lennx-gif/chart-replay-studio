@@ -5,8 +5,9 @@ import {
 import { detectBaseTimeframe, type OHLCVBar } from '@/lib/csvParser';
 import type { Drawing, DrawingType } from '@/lib/drawings';
 import type { ChartStyle, SessionRecord } from '@/lib/db';
-import { calculateStats } from '@/lib/tradeEngine';
+import { calculateStats, getContractMultiplier } from '@/lib/tradeEngine';
 import { SPEEDS, buildTimeframeIndex, detectPricePrecision, visibleCandles } from '@/lib/replay';
+import { getNewYorkOffset } from '@/lib/timezone';
 import { useReplayEngine } from '@/hooks/useReplayEngine';
 import { useSessionAutosave } from '@/hooks/useSessionAutosave';
 import { ChartToolbar } from './ChartToolbar';
@@ -21,6 +22,7 @@ import { TradeJournal } from './TradeJournal';
 import { GoToDate } from './GoToDate';
 import { SessionOverlay } from './SessionOverlay';
 import { BalanceSettings } from './BalanceSettings';
+import { SessionDashboardModal } from './SessionDashboardModal';
 import { Globe, BarChart3, BookOpen, Columns, Eye, EyeOff, CandlestickChart, LineChart, BarChart } from 'lucide-react';
 
 interface ChartViewProps {
@@ -60,11 +62,19 @@ function MiniChart({ raw, minutes, position, tzOffset }: { raw: OHLCVBar[]; minu
       wickDownColor: '#e05347', wickUpColor: '#4caf50',
     });
     chartRef.current = chart;
-    const onResize = () => {
-      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth, height: containerRef.current.clientHeight });
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) chart.applyOptions({ width, height });
+      }
+    });
+    if (containerRef.current) ro.observe(containerRef.current);
+    return () => {
+      ro.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
     };
-    window.addEventListener('resize', onResize);
-    return () => { window.removeEventListener('resize', onResize); chart.remove(); chartRef.current = null; seriesRef.current = null; };
   }, []);
 
   useEffect(() => {
@@ -106,7 +116,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
 
   const [name, setName] = useState(session.name);
   const [notes, setNotes] = useState(session.notes);
-  const [tzOffset, setTzOffset] = useState(session.tzOffset);
+  const [tzOffset, setTzOffset] = useState(() => (session.tzOffset != null && session.tzOffset !== 0 ? session.tzOffset : getNewYorkOffset()));
   const [chartStyle, setChartStyle] = useState<ChartStyle>(session.chartStyle);
   const [startingBalance, setStartingBalance] = useState(session.startingBalance);
   const [drawings, setDrawings] = useState<Drawing[]>(session.drawings);
@@ -118,8 +128,9 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
     } catch { return ['trendline', 'horizontal', 'fibonacci']; }
   });
   const [showJournal, setShowJournal] = useState(false);
+  const [showDashboard, setShowDashboard] = useState(false);
   const [showMultiChart, setShowMultiChart] = useState(false);
-  const [showSessions, setShowSessions] = useState(false);
+  const [showSessions, setShowSessions] = useState(true);
 
   const baseTimeframe = useMemo(() => detectBaseTimeframe(rawBars), [rawBars]);
   const precision = useMemo(() => detectPricePrecision(rawBars), [rawBars]);
@@ -131,10 +142,19 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
   const stats = useMemo(() => calculateStats(orders, startingBalance), [orders, startingBalance]);
   const displayCandles = useMemo(() => shift(candles, tzOffset), [candles, tzOffset]);
 
-  const openOrders = orders.filter((o) => o.status === 'filled').map((o) => ({
-    id: o.id, side: o.side, fillPrice: o.fillPrice, stopLoss: o.stopLoss, takeProfit: o.takeProfit, size: o.size,
-    unrealizedPnl: (o.side === 'buy' ? currentPrice - (o.fillPrice || 0) : (o.fillPrice || 0) - currentPrice) * o.size,
-  }));
+  const openOrders = orders.filter((o) => o.status === 'filled').map((o) => {
+    const mult = o.contractMultiplier ?? getContractMultiplier(o.fillPrice || currentPrice);
+    const diff = o.side === 'buy' ? currentPrice - (o.fillPrice || 0) : (o.fillPrice || 0) - currentPrice;
+    return {
+      id: o.id,
+      side: o.side,
+      fillPrice: o.fillPrice,
+      stopLoss: o.stopLoss,
+      takeProfit: o.takeProfit,
+      size: o.size,
+      unrealizedPnl: diff * o.size * mult,
+    };
+  });
   const pendingOrders = orders.filter((o) => o.status === 'pending');
 
   // ---------------------------------------------------------------- autosave
@@ -188,12 +208,18 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
     setChartApi(chart);
     setSeriesApi(main);
 
-    const onResize = () => {
-      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth, height: containerRef.current.clientHeight });
-    };
-    window.addEventListener('resize', onResize);
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          chart.applyOptions({ width, height });
+        }
+      }
+    });
+    if (containerRef.current) ro.observe(containerRef.current);
+
     return () => {
-      window.removeEventListener('resize', onResize);
+      ro.disconnect();
       chartDisposed.current = true;
       chart.remove();
       volumeRef.current = null;
@@ -330,6 +356,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
         case 's': setActiveTool('position_short'); break;
         case 'm': setActiveTool('measure'); break;
         case 'j': case 'J': setShowJournal((p) => !p); break;
+        case 'd': case 'D': setShowDashboard((p) => !p); break;
       }
     };
     window.addEventListener('keydown', handler);
@@ -343,10 +370,10 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
   }, [timeframe, baseTimeframe]);
 
   return (
-    <div className="flex flex-col h-screen bg-background">
+    <div className="flex flex-col h-screen w-screen max-w-full overflow-hidden bg-background relative">
       {/* Top bar */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-card gap-x-3 gap-y-2 flex-wrap">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-card gap-2 overflow-x-auto no-scrollbar shrink-0 select-none min-w-0">
+        <div className="flex items-center gap-2.5 shrink-0">
           <SessionBar
             name={name}
             onNameChange={setName}
@@ -380,21 +407,21 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
           <GoToDate raw={rawBars} position={position} tzOffset={tzOffset} onSeek={engine.seek} onSeekTime={engine.seekToTime} />
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 shrink-0">
           {stats.totalTrades > 0 && (
-            <div className="flex items-center gap-2 text-[10px] font-mono">
-              <span className={stats.totalPnl >= 0 ? 'text-long' : 'text-short'}>
-                P&L: {stats.totalPnl >= 0 ? '+' : ''}{stats.totalPnl.toFixed(2)}
+            <div className="flex items-center gap-2 text-[10px] font-mono px-2 py-0.5 rounded bg-secondary/40 border border-border/50">
+              <span className={stats.totalPnl >= 0 ? 'text-long font-semibold' : 'text-short font-semibold'}>
+                {stats.totalPnl >= 0 ? '+' : ''}${stats.totalPnl.toFixed(2)}
               </span>
-              <span className="text-muted-foreground">|</span>
-              <span className="text-muted-foreground">WR: {stats.winRate.toFixed(0)}%</span>
-              <span className="text-muted-foreground">|</span>
-              <span className="text-muted-foreground">Trades: {stats.totalTrades}</span>
+              <span className="text-muted-foreground">·</span>
+              <span className="text-muted-foreground">WR {stats.winRate.toFixed(0)}%</span>
+              <span className="text-muted-foreground">·</span>
+              <span className="text-muted-foreground">{stats.totalTrades}T</span>
             </div>
           )}
 
           {lastCandle && (
-            <div className="flex items-center gap-3 text-xs font-mono">
+            <div className="hidden xl:flex items-center gap-2.5 text-xs font-mono">
               <span className="text-muted-foreground">O</span><span className="text-foreground">{lastCandle.open.toFixed(precision)}</span>
               <span className="text-muted-foreground">H</span><span className="text-foreground">{lastCandle.high.toFixed(precision)}</span>
               <span className="text-muted-foreground">L</span><span className="text-foreground">{lastCandle.low.toFixed(precision)}</span>
@@ -402,7 +429,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
               <span className={lastCandle.close >= lastCandle.open ? 'text-long' : 'text-short'}>{lastCandle.close.toFixed(precision)}</span>
             </div>
           )}
-          <div className="w-px h-5 bg-border" />
+          <div className="w-px h-5 bg-border hidden sm:block" />
           <div className="flex items-center gap-1.5">
             <Globe size={13} className="text-muted-foreground" />
             <TimezoneSelector offset={tzOffset} onOffsetChange={setTzOffset} />
@@ -421,6 +448,14 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
               <BookOpen size={12} />
               <span className="hidden lg:inline">Journal</span>
             </button>
+            <button
+              className={`toolbar-btn text-xs gap-1 ${showDashboard ? 'toolbar-btn-active text-primary border-primary/50' : ''}`}
+              onClick={() => setShowDashboard((p) => !p)}
+              title="Session telemetry & strategy dashboard (D)"
+            >
+              <BarChart3 size={12} />
+              <span className="hidden lg:inline">Dashboard</span>
+            </button>
           </div>
 
           <BalanceSettings balance={startingBalance} onBalanceChange={setStartingBalance} />
@@ -428,18 +463,18 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
       </div>
 
       {/* Main content area */}
-      <div className="flex-1 flex overflow-hidden relative">
+      <div className="flex-1 flex overflow-hidden relative min-w-0">
         {showMultiChart && (
-          <div className="w-72 border-r border-border flex flex-col overflow-hidden bg-background">
+          <div className="w-72 border-r border-border flex flex-col overflow-hidden bg-background shrink-0">
             {multiTFs.map((m) => (
               <MiniChart key={m} raw={rawBars} minutes={m} position={position} tzOffset={tzOffset} />
             ))}
           </div>
         )}
 
-        <div className="flex-1 relative" style={{ cursor: activeTool ? 'crosshair' : 'default' }}>
+        <div className="flex-1 relative min-w-0 overflow-hidden" style={{ cursor: activeTool ? 'crosshair' : 'default' }}>
           <div ref={containerRef} className="absolute inset-0" />
-          <SessionOverlay chart={chartApi} containerRef={containerRef} visibleBars={displayCandles} showSessions={showSessions} />
+          <SessionOverlay chart={chartApi} containerRef={containerRef} visibleBars={displayCandles} showSessions={showSessions} tzOffset={tzOffset} />
           <DrawingOverlay
             chart={chartApi}
             series={seriesApi}
@@ -463,6 +498,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
           currentPrice={currentPrice}
           onPlaceOrder={engine.placeMarket}
           onCloseOrder={engine.closeOrder}
+          onUpdateOrder={engine.updateOrder}
           onCloseAll={engine.closeAll}
           onCancelOrder={engine.cancelOrder}
           openOrders={openOrders}
@@ -471,6 +507,20 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
         />
 
         {showJournal && <TradeJournal orders={orders} onClose={() => setShowJournal(false)} startingBalance={startingBalance} />}
+
+        <SessionDashboardModal
+          open={showDashboard}
+          onClose={() => setShowDashboard(false)}
+          session={session}
+          stats={stats}
+          currentPrice={currentPrice}
+          orders={orders}
+          notes={notes}
+          onNotesChange={setNotes}
+          startingBalance={startingBalance}
+          position={position}
+          total={total}
+        />
       </div>
 
       <ReplayControls
