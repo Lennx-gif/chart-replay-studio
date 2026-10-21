@@ -63,4 +63,18 @@ describe('useReplayEngine', () => {
     act(() => result.current.seekToTime(raw[24].time));
     expect(result.current.position).toBe(25);
   });
+
+  it('updates stopLoss and takeProfit levels dynamically on active orders for dragging', () => {
+    const { result } = setup();
+    act(() => result.current.placeMarket('buy', 1, raw[9].close - 2, raw[9].close + 2));
+    const order = result.current.orders[0];
+    expect(order.stopLoss).toBe(raw[9].close - 2);
+    expect(order.takeProfit).toBe(raw[9].close + 2);
+
+    // Draggable SL/TP updates
+    act(() => result.current.updateOrder(order.id, { stopLoss: raw[9].close - 1, takeProfit: raw[9].close + 5 }));
+    const updated = result.current.orders[0];
+    expect(updated.stopLoss).toBe(raw[9].close - 1);
+    expect(updated.takeProfit).toBe(raw[9].close + 5);
+  });
 });

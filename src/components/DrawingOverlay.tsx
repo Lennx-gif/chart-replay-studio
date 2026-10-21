@@ -2,15 +2,19 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import type { Drawing, DrawingType, DrawingPoint, LineStyle } from '@/lib/drawings';
 import { createDrawingId, DEFAULT_COLORS, DEFAULT_FIB_LEVELS, DEFAULT_FIB_EXT_LEVELS, getClicksNeeded } from '@/lib/drawings';
+import type { Order } from '@/lib/tradeEngine';
 import { DrawingFloatingToolbar } from './DrawingFloatingToolbar';
 
 interface DrawingOverlayProps {
   chart: IChartApi | null;
   series: ISeriesApi<'Candlestick'> | null;
   activeTool: DrawingType | null;
+  onToolChange?: (tool: DrawingType | null) => void;
   drawings: Drawing[];
   onDrawingsChange: (drawings: Drawing[]) => void;
   containerRef: React.RefObject<HTMLDivElement>;
+  orders?: Order[];
+  onUpdateOrder?: (orderId: string, updates: { stopLoss?: number; takeProfit?: number; limitPrice?: number }) => void;
   onPlacePendingOrder?: (side: 'buy' | 'sell', price: number, sl?: number, tp?: number) => void;
 }
 
@@ -48,7 +52,18 @@ function distToLine(px: number, py: number, x1: number, y1: number, x2: number, 
 
 export type DragAnchor = 'body' | 'p0' | 'p1' | 'p2' | 'sl' | 'tp' | 'entry';
 
-export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawingsChange, containerRef, onPlacePendingOrder }: DrawingOverlayProps) {
+export function DrawingOverlay({
+  chart,
+  series,
+  activeTool,
+  onToolChange,
+  drawings,
+  onDrawingsChange,
+  containerRef,
+  orders,
+  onUpdateOrder,
+  onPlacePendingOrder,
+}: DrawingOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pendingPointsRef = useRef<DrawingPoint[]>([]);
   const mouseRef = useRef<{ x: number; y: number } | null>(null);
@@ -62,6 +77,15 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     startCoord: { time: number; price: number };
     originalPoints: DrawingPoint[];
     originalDrawing: Drawing;
+  } | null>(null);
+  const [orderDragState, setOrderDragState] = useState<{
+    orderId: string;
+    type: 'sl' | 'tp';
+    startPrice: number;
+    currentPrice: number;
+    side: 'buy' | 'sell';
+    entryPrice: number;
+    size: number;
   } | null>(null);
   const [toolbarPos, setToolbarPos] = useState<{ x: number; y: number } | null>(null);
   const isBrushing = useRef(false);
@@ -142,11 +166,25 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
         const entryY = series.priceToCoordinate(d.entryPrice);
         const slY = d.stopLoss != null ? series.priceToCoordinate(d.stopLoss) : null;
         const tpY = d.takeProfit != null ? series.priceToCoordinate(d.takeProfit) : null;
-        const dists: number[] = [];
-        if (entryY !== null) dists.push(Math.abs(my - entryY));
-        if (slY !== null) dists.push(Math.abs(my - slY));
-        if (tpY !== null) dists.push(Math.abs(my - tpY));
-        if (dists.length > 0) dist = Math.min(...dists);
+        const x1 = d.points[0] ? timeScale.timeToCoordinate(d.points[0].time as any) : null;
+        const boxWidth = 280;
+        const leftX = x1 !== null ? x1 - 30 : 0;
+        const rightX = x1 !== null ? x1 + boxWidth + 50 : 3000;
+
+        if (mx >= leftX && mx <= rightX) {
+          const dists: number[] = [];
+          if (entryY !== null) dists.push(Math.abs(my - entryY));
+          if (slY !== null) dists.push(Math.abs(my - slY));
+          if (tpY !== null) dists.push(Math.abs(my - tpY));
+          if (dists.length > 0) dist = Math.min(...dists);
+
+          const allYs = [entryY, slY, tpY].filter((y): y is number => y !== null);
+          if (allYs.length > 0) {
+            const minY = Math.min(...allYs);
+            const maxY = Math.max(...allYs);
+            if (my >= minY - 8 && my <= maxY + 8) dist = 0;
+          }
+        }
       } else if (d.type === 'triangle' && d.points.length === 3) {
         // Hit test on edges of triangle
         for (let i = 0; i < 3; i++) {
@@ -186,11 +224,19 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
       const tpY = d.takeProfit != null ? series.priceToCoordinate(d.takeProfit) : null;
       const x1 = d.points[0] ? timeScale.timeToCoordinate(d.points[0].time as any) : null;
       const boxWidth = 280;
+      const leftX = x1 !== null ? x1 - 30 : 0;
+      const rightX = x1 !== null ? x1 + boxWidth + 50 : 3000;
 
-      if (x1 !== null && mx >= x1 - 20 && mx <= x1 + boxWidth + 20) {
-        if (slY !== null && Math.abs(my - slY) <= 12) return 'sl';
-        if (tpY !== null && Math.abs(my - tpY) <= 12) return 'tp';
-        if (entryY !== null && Math.abs(my - entryY) <= 12) return 'entry';
+      if (mx >= leftX && mx <= rightX) {
+        if (slY !== null && Math.abs(my - slY) <= 18) return 'sl';
+        if (tpY !== null && Math.abs(my - tpY) <= 18) return 'tp';
+        if (entryY !== null && Math.abs(my - entryY) <= 14) return 'entry';
+        const allYs = [entryY, slY, tpY].filter((y): y is number => y !== null);
+        if (allYs.length > 0) {
+          const minY = Math.min(...allYs);
+          const maxY = Math.max(...allYs);
+          if (my >= minY && my <= maxY) return 'body';
+        }
       }
     }
 
@@ -283,15 +329,15 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
         showLabel: true,
       };
       onDrawingsChange([...drawings, drawing]);
-      if (activeTool === 'text') {
-        setSelectedDrawingId(drawing.id);
-      }
+      setSelectedDrawingId(drawing.id);
+      onToolChange?.(null);
       pendingPointsRef.current = [];
     } else if (needed === 3) {
       const pts = [...pendingPointsRef.current, point];
       if (pts.length < 3) {
         pendingPointsRef.current = pts;
       } else {
+        let createdDrawing: Drawing | null = null;
         if (activeTool === 'position_long' || activeTool === 'position_short') {
           const entry = pts[0].price;
           const sl = pts[1].price;
@@ -299,7 +345,7 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
           const risk = Math.abs(entry - sl);
           const reward = Math.abs(tp - entry);
           const rr = risk > 0 ? reward / risk : 0;
-          const drawing: Drawing = {
+          createdDrawing = {
             id: createDrawingId(),
             type: activeTool,
             points: pts,
@@ -312,9 +358,8 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
             riskRewardRatio: rr,
             showLabel: true,
           };
-          onDrawingsChange([...drawings, drawing]);
         } else if (activeTool === 'triangle') {
-          const drawing: Drawing = {
+          createdDrawing = {
             id: createDrawingId(),
             type: activeTool,
             points: pts,
@@ -324,9 +369,8 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
             fillOpacity: 0.1,
             showLabel: true,
           };
-          onDrawingsChange([...drawings, drawing]);
         } else if (activeTool === 'pitchfork') {
-          const drawing: Drawing = {
+          createdDrawing = {
             id: createDrawingId(),
             type: activeTool,
             points: pts,
@@ -335,9 +379,8 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
             lineStyle: 'solid',
             showLabel: true,
           };
-          onDrawingsChange([...drawings, drawing]);
         } else if (activeTool === 'fib_extension') {
-          const drawing: Drawing = {
+          createdDrawing = {
             id: createDrawingId(),
             type: activeTool,
             points: pts,
@@ -347,7 +390,11 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
             fibLevels: DEFAULT_FIB_EXT_LEVELS,
             showLabel: true,
           };
-          onDrawingsChange([...drawings, drawing]);
+        }
+        if (createdDrawing) {
+          onDrawingsChange([...drawings, createdDrawing]);
+          setSelectedDrawingId(createdDrawing.id);
+          onToolChange?.(null);
         }
         pendingPointsRef.current = [];
       }
@@ -367,10 +414,12 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
           showLabel: true,
         };
         onDrawingsChange([...drawings, drawing]);
+        setSelectedDrawingId(drawing.id);
+        onToolChange?.(null);
         pendingPointsRef.current = [];
       }
     }
-  }, [activeTool, drawings, onDrawingsChange, getBarAndPrice, snapPrice, hitTestDrawing, containerRef]);
+  }, [activeTool, drawings, onDrawingsChange, getBarAndPrice, snapPrice, hitTestDrawing, containerRef, onToolChange]);
 
   // Mouse move
   const handleMouseMove = useCallback((e: MouseEvent) => {
@@ -386,17 +435,28 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
       return;
     }
 
-    // Drag in progress
-    if (dragState) {
-      const timeCoord = chart.timeScale().coordinateToTime(mx);
+    // Order SL / TP drag in progress
+    if (orderDragState) {
       const priceCoord = series.coordinateToPrice(my);
-      if (timeCoord === null || priceCoord === null) return;
+      if (priceCoord !== null) {
+        const snapP = snapPrice(priceCoord);
+        setOrderDragState(prev => prev ? { ...prev, currentPrice: snapP } : null);
+        if (canvasRef.current) canvasRef.current.style.cursor = 'ns-resize';
+      }
+      return;
+    }
+
+    // Drawing drag in progress
+    if (dragState) {
+      const priceCoord = series.coordinateToPrice(my);
+      if (priceCoord === null) return;
+
+      const snapP = snapPrice(priceCoord);
+      const timeCoord = chart.timeScale().coordinateToTime(mx);
+      const timeSec = (timeCoord as number | null) ?? dragState.startCoord.time;
 
       const d = drawings.find(dd => dd.id === dragState.drawingId);
       if (!d) return;
-
-      const snapP = snapPrice(priceCoord);
-      const timeSec = timeCoord as number;
 
       if (dragState.anchor === 'body') {
         if (d.type === 'horizontal' && d.points[0]) {
@@ -406,13 +466,15 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
           };
           onDrawingsChange(drawings.map(dd => dd.id === d.id ? updated : dd));
         } else if (d.type === 'vertical' && d.points[0]) {
-          const updated: Drawing = {
-            ...d,
-            points: [{ ...d.points[0], time: timeSec }],
-          };
-          onDrawingsChange(drawings.map(dd => dd.id === d.id ? updated : dd));
+          if (timeCoord !== null) {
+            const updated: Drawing = {
+              ...d,
+              points: [{ ...d.points[0], time: timeSec }],
+            };
+            onDrawingsChange(drawings.map(dd => dd.id === d.id ? updated : dd));
+          }
         } else if (d.type === 'position_long' || d.type === 'position_short') {
-          const dt = timeSec - dragState.startCoord.time;
+          const dt = timeCoord !== null ? timeSec - dragState.startCoord.time : 0;
           const dp = snapP - dragState.startCoord.price;
           const newEntry = snapPrice((dragState.originalDrawing.entryPrice ?? d.points[0]?.price) + dp);
           const newSL = dragState.originalDrawing.stopLoss != null ? snapPrice(dragState.originalDrawing.stopLoss + dp) : undefined;
@@ -430,7 +492,7 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
           };
           onDrawingsChange(drawings.map(dd => dd.id === d.id ? updated : dd));
         } else {
-          const dt = timeSec - dragState.startCoord.time;
+          const dt = timeCoord !== null ? timeSec - dragState.startCoord.time : 0;
           const dp = snapP - dragState.startCoord.price;
           const newPoints = dragState.originalPoints.map(p => ({
             time: p.time + dt,
@@ -441,7 +503,7 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
         }
       } else if (dragState.anchor === 'p0') {
         const newPoints = [...d.points];
-        newPoints[0] = { time: timeSec, price: snapP };
+        newPoints[0] = { time: timeCoord !== null ? timeSec : (newPoints[0]?.time ?? 0), price: snapP };
         const updated: Drawing = { ...d, points: newPoints };
         if (d.type === 'position_long' || d.type === 'position_short') {
           updated.entryPrice = snapP;
@@ -455,14 +517,14 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
       } else if (dragState.anchor === 'p1') {
         const newPoints = [...d.points];
         if (newPoints.length > 1) {
-          newPoints[1] = { time: timeSec, price: snapP };
+          newPoints[1] = { time: timeCoord !== null ? timeSec : (newPoints[1]?.time ?? 0), price: snapP };
           const updated: Drawing = { ...d, points: newPoints };
           onDrawingsChange(drawings.map(dd => dd.id === d.id ? updated : dd));
         }
       } else if (dragState.anchor === 'p2') {
         const newPoints = [...d.points];
         if (newPoints.length > 2) {
-          newPoints[2] = { time: timeSec, price: snapP };
+          newPoints[2] = { time: timeCoord !== null ? timeSec : (newPoints[2]?.time ?? 0), price: snapP };
           const updated: Drawing = { ...d, points: newPoints };
           onDrawingsChange(drawings.map(dd => dd.id === d.id ? updated : dd));
         }
@@ -518,26 +580,61 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     }
 
     if (!activeTool && canvasRef.current) {
-      if (selectedDrawing) {
-        const anchor = findAnchorHit(mx, my, selectedDrawing);
-        if (anchor === 'p0' || anchor === 'p1' || anchor === 'p2') {
-          canvasRef.current.style.cursor = 'crosshair';
-        } else if (anchor === 'sl' || anchor === 'tp' || anchor === 'entry') {
-          canvasRef.current.style.cursor = 'ns-resize';
-        } else if (anchor === 'body') {
-          canvasRef.current.style.cursor = 'grab';
+      // Check live order SL/TP hover
+      let hitOrderLevel = false;
+      if (orders && orders.length > 0) {
+        for (const o of orders) {
+          if (o.status !== 'filled' && o.status !== 'pending') continue;
+          if (o.stopLoss != null) {
+            const slY = series.priceToCoordinate(o.stopLoss);
+            if (slY !== null && Math.abs(my - slY) <= 16) {
+              canvasRef.current.style.cursor = 'ns-resize';
+              hitOrderLevel = true;
+              break;
+            }
+          }
+          if (o.takeProfit != null) {
+            const tpY = series.priceToCoordinate(o.takeProfit);
+            if (tpY !== null && Math.abs(my - tpY) <= 16) {
+              canvasRef.current.style.cursor = 'ns-resize';
+              hitOrderLevel = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!hitOrderLevel) {
+        if (selectedDrawing) {
+          const anchor = findAnchorHit(mx, my, selectedDrawing);
+          if (anchor === 'p0' || anchor === 'p1' || anchor === 'p2') {
+            canvasRef.current.style.cursor = 'crosshair';
+          } else if (anchor === 'sl' || anchor === 'tp' || anchor === 'entry') {
+            canvasRef.current.style.cursor = 'ns-resize';
+          } else if (anchor === 'body') {
+            canvasRef.current.style.cursor = 'grab';
+          } else {
+            const hit = hitTestDrawing(mx, my);
+            canvasRef.current.style.cursor = hit ? 'grab' : 'default';
+            setHoveredDrawingId(hit?.id || null);
+          }
         } else {
           const hit = hitTestDrawing(mx, my);
-          canvasRef.current.style.cursor = hit ? 'grab' : 'default';
+          if (hit) {
+            const anchor = findAnchorHit(mx, my, hit);
+            if (anchor === 'sl' || anchor === 'tp' || anchor === 'entry') {
+              canvasRef.current.style.cursor = 'ns-resize';
+            } else {
+              canvasRef.current.style.cursor = 'grab';
+            }
+          } else {
+            canvasRef.current.style.cursor = 'default';
+          }
           setHoveredDrawingId(hit?.id || null);
         }
-      } else {
-        const hit = hitTestDrawing(mx, my);
-        canvasRef.current.style.cursor = hit ? 'grab' : 'default';
-        setHoveredDrawingId(hit?.id || null);
       }
     }
-  }, [containerRef, chart, series, activeTool, dragState, drawings, snapPrice, onDrawingsChange, selectedDrawing, findAnchorHit, hitTestDrawing]);
+  }, [containerRef, chart, series, activeTool, dragState, orderDragState, drawings, snapPrice, onDrawingsChange, selectedDrawing, findAnchorHit, hitTestDrawing, orders]);
 
   // Mouse down - start drag or brush
   const handleMouseDown = useCallback((e: MouseEvent) => {
@@ -554,11 +651,59 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
 
-    const timeCoord = chart.timeScale().coordinateToTime(mx);
     const priceCoord = series.coordinateToPrice(my);
-    if (timeCoord === null || priceCoord === null) return;
+    if (priceCoord === null) return;
+    const timeCoord = chart.timeScale().coordinateToTime(mx);
+    const timeSec = (timeCoord as number | null) ?? 0;
 
-    // Check currently selected drawing first
+    // 1. Check active live orders SL and TP drag
+    if (orders && orders.length > 0) {
+      for (const o of orders) {
+        if (o.status !== 'filled' && o.status !== 'pending') continue;
+        const entry = o.fillPrice ?? o.limitPrice;
+        if (!entry) continue;
+
+        // Check SL
+        if (o.stopLoss != null) {
+          const slY = series.priceToCoordinate(o.stopLoss);
+          if (slY !== null && Math.abs(my - slY) <= 16) {
+            e.preventDefault();
+            e.stopPropagation();
+            setOrderDragState({
+              orderId: o.id,
+              type: 'sl',
+              startPrice: o.stopLoss,
+              currentPrice: o.stopLoss,
+              side: o.side,
+              entryPrice: entry,
+              size: o.size,
+            });
+            return;
+          }
+        }
+
+        // Check TP
+        if (o.takeProfit != null) {
+          const tpY = series.priceToCoordinate(o.takeProfit);
+          if (tpY !== null && Math.abs(my - tpY) <= 16) {
+            e.preventDefault();
+            e.stopPropagation();
+            setOrderDragState({
+              orderId: o.id,
+              type: 'tp',
+              startPrice: o.takeProfit,
+              currentPrice: o.takeProfit,
+              side: o.side,
+              entryPrice: entry,
+              size: o.size,
+            });
+            return;
+          }
+        }
+      }
+    }
+
+    // 2. Check currently selected drawing first
     if (selectedDrawing && !selectedDrawing.locked && selectedDrawing.visible !== false) {
       const anchor = findAnchorHit(mx, my, selectedDrawing);
       if (anchor) {
@@ -568,7 +713,7 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
           drawingId: selectedDrawing.id,
           anchor,
           startMouse: { x: mx, y: my },
-          startCoord: { time: timeCoord as number, price: snapPrice(priceCoord) },
+          startCoord: { time: timeSec || (selectedDrawing.points[0]?.time ?? 0), price: snapPrice(priceCoord) },
           originalPoints: selectedDrawing.points.map(p => ({ ...p })),
           originalDrawing: { ...selectedDrawing },
         });
@@ -576,7 +721,7 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
       }
     }
 
-    // Check hit against any drawing
+    // 3. Check hit against any drawing
     const hit = hitTestDrawing(mx, my);
     if (hit && !hit.locked && hit.visible !== false) {
       e.preventDefault();
@@ -588,14 +733,26 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
         drawingId: hit.id,
         anchor,
         startMouse: { x: mx, y: my },
-        startCoord: { time: timeCoord as number, price: snapPrice(priceCoord) },
+        startCoord: { time: timeSec || (hit.points[0]?.time ?? 0), price: snapPrice(priceCoord) },
         originalPoints: hit.points.map(p => ({ ...p })),
         originalDrawing: { ...hit },
       });
     }
-  }, [activeTool, containerRef, chart, series, selectedDrawing, findAnchorHit, hitTestDrawing, snapPrice]);
+  }, [activeTool, containerRef, chart, series, selectedDrawing, findAnchorHit, hitTestDrawing, snapPrice, orders]);
 
   const handleMouseUp = useCallback(() => {
+    if (orderDragState) {
+      if (orderDragState.currentPrice !== orderDragState.startPrice) {
+        if (orderDragState.type === 'sl') {
+          onUpdateOrder?.(orderDragState.orderId, { stopLoss: orderDragState.currentPrice });
+        } else if (orderDragState.type === 'tp') {
+          onUpdateOrder?.(orderDragState.orderId, { takeProfit: orderDragState.currentPrice });
+        }
+      }
+      setOrderDragState(null);
+      if (canvasRef.current) canvasRef.current.style.cursor = 'default';
+    }
+
     if (dragState) {
       setDragState(null);
       if (canvasRef.current) canvasRef.current.style.cursor = 'default';
@@ -613,10 +770,11 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
         brushPoints: [...brushPointsRef.current],
       };
       onDrawingsChange([...drawings, drawing]);
+      onToolChange?.(null);
     }
     isBrushing.current = false;
     brushPointsRef.current = [];
-  }, [dragState, activeTool, drawings, onDrawingsChange]);
+  }, [orderDragState, dragState, activeTool, drawings, onDrawingsChange, onUpdateOrder, onToolChange]);
 
   // Right-click context menu
   const handleContextMenu = useCallback((e: MouseEvent) => {
@@ -625,7 +783,12 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
       pendingPointsRef.current = [];
       return;
     }
-    if (!containerRef.current || activeTool) return;
+    if (activeTool) {
+      e.preventDefault();
+      onToolChange?.(null);
+      return;
+    }
+    if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
@@ -635,12 +798,18 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
       setSelectedDrawingId(hit.id);
       setContextMenu({ x: mx, y: my, drawingId: hit.id });
     }
-  }, [activeTool, hitTestDrawing, containerRef]);
+  }, [activeTool, hitTestDrawing, containerRef, onToolChange]);
 
   // Keyboard: Delete/Backspace
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === 'Escape') {
+        if (activeTool) onToolChange?.(null);
+        pendingPointsRef.current = [];
+        setSelectedDrawingId(null);
+        setContextMenu(null);
+      }
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedDrawingId) {
         e.preventDefault();
         onDrawingsChange(drawings.filter(d => d.id !== selectedDrawingId));
@@ -655,7 +824,7 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [selectedDrawingId, drawings, onDrawingsChange]);
+  }, [selectedDrawingId, drawings, onDrawingsChange, activeTool, onToolChange]);
 
   useEffect(() => {
     pendingPointsRef.current = [];
@@ -773,6 +942,109 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
         ctx.setLineDash([]);
       }
 
+      // Live order draggable badges & ghost lines
+      if (orders && orders.length > 0) {
+        for (const o of orders) {
+          if (o.status !== 'filled' && o.status !== 'pending') continue;
+          const entry = o.fillPrice ?? o.limitPrice;
+          if (!entry) continue;
+
+          const isDraggingSL = orderDragState?.orderId === o.id && orderDragState.type === 'sl';
+          const isDraggingTP = orderDragState?.orderId === o.id && orderDragState.type === 'tp';
+
+          const activeSL = isDraggingSL ? orderDragState.currentPrice : o.stopLoss;
+          const activeTP = isDraggingTP ? orderDragState.currentPrice : o.takeProfit;
+
+          // Render SL Draggable Badge
+          if (activeSL != null) {
+            const slY = series.priceToCoordinate(activeSL);
+            if (slY !== null) {
+              const badgeW = 96;
+              const badgeH = 20;
+              const badgeX = width - badgeW - 65;
+              ctx.save();
+              ctx.fillStyle = isDraggingSL ? '#e05347' : '#1e1412e6';
+              ctx.strokeStyle = '#e05347';
+              ctx.lineWidth = isDraggingSL ? 2 : 1.5;
+              ctx.beginPath();
+              ctx.roundRect(badgeX, slY - badgeH / 2, badgeW, badgeH, 4);
+              ctx.fill();
+              ctx.stroke();
+
+              ctx.font = 'bold 9px JetBrains Mono, monospace';
+              ctx.fillStyle = isDraggingSL ? '#ffffff' : '#e05347';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(`SL ${activeSL.toFixed(activeSL > 10 ? 2 : 4)} ↕`, badgeX + badgeW / 2, slY);
+
+              // Projected loss / pips tag
+              const diff = o.side === 'buy' ? activeSL - entry : entry - activeSL;
+              const pips = diff * (entry > 10 ? 100 : 10000);
+              const estLoss = diff * o.size * (entry > 10 ? 1 : 100000);
+              const infoText = `${pips.toFixed(0)}p ($${estLoss.toFixed(2)})`;
+
+              if (isDraggingSL) {
+                ctx.setLineDash([4, 4]);
+                ctx.strokeStyle = '#e05347';
+                ctx.beginPath(); ctx.moveTo(0, slY); ctx.lineTo(width, slY); ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.fillStyle = '#ff7b72';
+                ctx.fillText(infoText, badgeX - 52, slY);
+              } else {
+                ctx.font = '8px JetBrains Mono, monospace';
+                ctx.fillStyle = '#e05347a0';
+                ctx.fillText(infoText, badgeX - 44, slY);
+              }
+              ctx.restore();
+            }
+          }
+
+          // Render TP Draggable Badge
+          if (activeTP != null) {
+            const tpY = series.priceToCoordinate(activeTP);
+            if (tpY !== null) {
+              const badgeW = 96;
+              const badgeH = 20;
+              const badgeX = width - badgeW - 65;
+              ctx.save();
+              ctx.fillStyle = isDraggingTP ? '#4caf50' : '#121e14e6';
+              ctx.strokeStyle = '#4caf50';
+              ctx.lineWidth = isDraggingTP ? 2 : 1.5;
+              ctx.beginPath();
+              ctx.roundRect(badgeX, tpY - badgeH / 2, badgeW, badgeH, 4);
+              ctx.fill();
+              ctx.stroke();
+
+              ctx.font = 'bold 9px JetBrains Mono, monospace';
+              ctx.fillStyle = isDraggingTP ? '#ffffff' : '#4caf50';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(`TP ${activeTP.toFixed(activeTP > 10 ? 2 : 4)} ↕`, badgeX + badgeW / 2, tpY);
+
+              // Projected profit / pips tag
+              const diff = o.side === 'buy' ? activeTP - entry : entry - activeTP;
+              const pips = diff * (entry > 10 ? 100 : 10000);
+              const estGain = diff * o.size * (entry > 10 ? 1 : 100000);
+              const infoText = `+${pips.toFixed(0)}p (+$${estGain.toFixed(2)})`;
+
+              if (isDraggingTP) {
+                ctx.setLineDash([4, 4]);
+                ctx.strokeStyle = '#4caf50';
+                ctx.beginPath(); ctx.moveTo(0, tpY); ctx.lineTo(width, tpY); ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.fillStyle = '#7ee787';
+                ctx.fillText(infoText, badgeX - 52, tpY);
+              } else {
+                ctx.font = '8px JetBrains Mono, monospace';
+                ctx.fillStyle = '#4caf50a0';
+                ctx.fillText(infoText, badgeX - 44, tpY);
+              }
+              ctx.restore();
+            }
+          }
+        }
+      }
+
       // Brush in progress
       if (isBrushing.current && brushPointsRef.current.length > 1) {
         ctx.strokeStyle = DEFAULT_COLORS.brush;
@@ -794,7 +1066,7 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     chart.timeScale().subscribeVisibleLogicalRangeChange(render);
     const interval = setInterval(render, 60);
     return () => { clearInterval(interval); };
-  }, [chart, series, drawings, activeTool, containerRef, selectedDrawingId, hoveredDrawingId, snapPrice]);
+  }, [chart, series, drawings, activeTool, containerRef, selectedDrawingId, hoveredDrawingId, snapPrice, orders, orderDragState]);
 
   // --- Render helpers ---
 
@@ -1251,26 +1523,30 @@ export function DrawingOverlay({ chart, series, activeTool, drawings, onDrawings
     ctx.fillText(`-${(risk * 10000).toFixed(0)}p`, x1 + boxWidth + 4, (entryY + slY) / 2 + 3);
 
     // Draggable Level Grab Handles
-    const drawLevelHandle = (px: number, py: number, color: string, label: string) => {
+    const drawLevelHandle = (px: number, py: number, color: string, label: string, isDraggingThis: boolean) => {
       ctx.save();
-      ctx.fillStyle = '#18130e';
+      ctx.fillStyle = isDraggingThis ? color : '#14100ce6';
       ctx.strokeStyle = color;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = isDraggingThis ? 2 : 1.5;
       ctx.beginPath();
-      ctx.roundRect(px - 16, py - 7, 32, 14, 4);
+      ctx.roundRect(px - 24, py - 9, 48, 18, 4);
       ctx.fill();
       ctx.stroke();
-      ctx.font = '8px JetBrains Mono, monospace';
-      ctx.fillStyle = color;
+      ctx.font = 'bold 9px JetBrains Mono, monospace';
+      ctx.fillStyle = isDraggingThis ? '#ffffff' : color;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(label, px, py);
       ctx.restore();
     };
 
-    drawLevelHandle(x1 + boxWidth / 2, slY, NUBIAN_SHORT, 'SL ↕');
-    drawLevelHandle(x1 + boxWidth / 2, tpY, NUBIAN_LONG, 'TP ↕');
-    drawLevelHandle(x1 + boxWidth / 2, entryY, NUBIAN_GOLD, 'MOVE ✢');
+    const isDraggingSL = dragState?.drawingId === d.id && dragState.anchor === 'sl';
+    const isDraggingTP = dragState?.drawingId === d.id && dragState.anchor === 'tp';
+    const isDraggingEntry = dragState?.drawingId === d.id && dragState.anchor === 'entry';
+
+    drawLevelHandle(x1 + boxWidth / 2, slY, NUBIAN_SHORT, 'SL ↕', isDraggingSL);
+    drawLevelHandle(x1 + boxWidth / 2, tpY, NUBIAN_LONG, 'TP ↕', isDraggingTP);
+    drawLevelHandle(x1 + boxWidth / 2, entryY, NUBIAN_GOLD, 'MOVE ✢', isDraggingEntry);
 
     if (isSelected) {
       drawAnchor(ctx, x1, entryY, NUBIAN_GOLD, true);

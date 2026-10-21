@@ -479,9 +479,12 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
             chart={chartApi}
             series={seriesApi}
             activeTool={activeTool}
+            onToolChange={setActiveTool}
             drawings={drawings}
             onDrawingsChange={setDrawings}
             containerRef={containerRef}
+            orders={orders}
+            onUpdateOrder={engine.updateOrder}
             onPlacePendingOrder={(side, price, sl, tp) => engine.placePending(side, price, sl, tp)}
           />
           <ChartToolbar
