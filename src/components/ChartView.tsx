@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useMemo, useState } from 'react';
+import { useEffect, useRef, useCallback, useMemo, useState, memo } from 'react';
 import {
   createChart, ColorType, LineStyle, type IChartApi, type IPriceLine, type ISeriesApi, type SeriesMarker, type Time,
 } from 'lightweight-charts';
@@ -6,7 +6,14 @@ import { detectBaseTimeframe, type OHLCVBar } from '@/lib/csvParser';
 import type { Drawing, DrawingType } from '@/lib/drawings';
 import type { ChartStyle, SessionRecord } from '@/lib/db';
 import { calculateStats, getContractMultiplier } from '@/lib/tradeEngine';
-import { SPEEDS, buildTimeframeIndex, detectPricePrecision, visibleCandles } from '@/lib/replay';
+import {
+  SPEEDS,
+  buildTimeframeIndex,
+  detectPricePrecision,
+  visibleCandles,
+  buildTimelineSeriesData,
+  buildTimelineVolumeData,
+} from '@/lib/replay';
 import { getNewYorkOffset } from '@/lib/timezone';
 import { useReplayEngine } from '@/hooks/useReplayEngine';
 import { useSessionAutosave } from '@/hooks/useSessionAutosave';
@@ -39,13 +46,38 @@ const shift = (bars: OHLCVBar[], tzOffset: number): OHLCVBar[] =>
   tzOffset === 0 ? bars : bars.map((b) => ({ ...b, time: b.time + tzOffset * 3600 }));
 
 /** A higher-timeframe chart built only from bars revealed so far — nothing from the future. */
-function MiniChart({ raw, minutes, position, tzOffset }: { raw: OHLCVBar[]; minutes: number; position: number; tzOffset: number }) {
+const MiniChart = memo(function MiniChart({
+  raw,
+  minutes,
+  position,
+  tzOffset,
+}: {
+  raw: OHLCVBar[];
+  minutes: number;
+  position: number;
+  tzOffset: number;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const renderedLen = useRef<number>(-1);
+  const lastTimeRef = useRef<number>(-1);
 
   const index = useMemo(() => buildTimeframeIndex(raw, minutes), [raw, minutes]);
-  const bars = useMemo(() => shift(visibleCandles(raw, index, position), tzOffset), [raw, index, position, tzOffset]);
+  const shiftedIndexBars = useMemo(
+    () => (tzOffset === 0 ? index.bars : index.bars.map((b) => ({ ...b, time: b.time + tzOffset * 3600 }))),
+    [index.bars, tzOffset]
+  );
+  const candles = useMemo(() => visibleCandles(raw, index, position), [raw, index, position]);
+  const bars = useMemo(() => {
+    if (tzOffset === 0) return candles;
+    const len = candles.length;
+    if (len === 0) return [];
+    const last = candles[len - 1];
+    const shiftedLast: OHLCVBar = { ...last, time: last.time + tzOffset * 3600 };
+    if (len === 1) return [shiftedLast];
+    return [...shiftedIndexBars.slice(0, len - 1), shiftedLast];
+  }, [candles, shiftedIndexBars, tzOffset]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -62,6 +94,8 @@ function MiniChart({ raw, minutes, position, tzOffset }: { raw: OHLCVBar[]; minu
       wickDownColor: '#e05347', wickUpColor: '#4caf50',
     });
     chartRef.current = chart;
+    renderedLen.current = -1;
+
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
@@ -78,9 +112,38 @@ function MiniChart({ raw, minutes, position, tzOffset }: { raw: OHLCVBar[]; minu
   }, []);
 
   useEffect(() => {
-    if (!seriesRef.current || !chartRef.current) return;
-    seriesRef.current.setData(bars.map((b) => ({ time: b.time as Time, open: b.open, high: b.high, low: b.low, close: b.close })));
-    chartRef.current.timeScale().scrollToPosition(-2, false);
+    const series = seriesRef.current;
+    const chart = chartRef.current;
+    if (!series || !chart) return;
+    const len = bars.length;
+    if (len === 0) {
+      series.setData([]);
+      renderedLen.current = 0;
+      return;
+    }
+    const last = bars[len - 1];
+    const pt = { time: last.time as Time, open: last.open, high: last.high, low: last.low, close: last.close };
+
+    if (
+      renderedLen.current > 0 &&
+      len >= renderedLen.current &&
+      len <= renderedLen.current + 50 &&
+      last.time >= lastTimeRef.current
+    ) {
+      if (len === renderedLen.current) {
+        series.update(pt);
+      } else {
+        for (let i = Math.max(0, renderedLen.current - 1); i < len; i++) {
+          const b = bars[i];
+          series.update({ time: b.time as Time, open: b.open, high: b.high, low: b.low, close: b.close });
+        }
+      }
+    } else {
+      series.setData(bars.map((b) => ({ time: b.time as Time, open: b.open, high: b.high, low: b.low, close: b.close })));
+      chart.timeScale().scrollToPosition(-2, false);
+    }
+    renderedLen.current = len;
+    lastTimeRef.current = last.time;
   }, [bars]);
 
   const last = bars[bars.length - 1];
@@ -95,7 +158,7 @@ function MiniChart({ raw, minutes, position, tzOffset }: { raw: OHLCVBar[]; minu
       <div ref={containerRef} className="flex-1 min-h-[140px]" />
     </div>
   );
-}
+});
 
 export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
   const containerRef = useRef<HTMLDivElement>(null!);
@@ -108,6 +171,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
   const rendered = useRef<{ len: number; first: number } | null>(null);
   /** True once the chart is removed; touching its series afterwards queues a repaint on a dead canvas. */
   const chartDisposed = useRef(true);
+  const prevMarkersRef = useRef<string>('');
 
   const engine = useReplayEngine(rawBars, session);
   const {
@@ -140,7 +204,19 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
   const lastCandle = candles[candles.length - 1];
   const currentPrice = lastRaw?.close ?? 0;
   const stats = useMemo(() => calculateStats(orders, startingBalance), [orders, startingBalance]);
-  const displayCandles = useMemo(() => shift(candles, tzOffset), [candles, tzOffset]);
+  const shiftedIndexBars = useMemo(
+    () => (tzOffset === 0 ? engine.index.bars : engine.index.bars.map((b) => ({ ...b, time: b.time + tzOffset * 3600 }))),
+    [engine.index.bars, tzOffset]
+  );
+  const displayCandles = useMemo(() => {
+    if (tzOffset === 0) return candles;
+    const len = candles.length;
+    if (len === 0) return [];
+    const last = candles[len - 1];
+    const shiftedLast: OHLCVBar = { ...last, time: last.time + tzOffset * 3600 };
+    if (len === 1) return [shiftedLast];
+    return [...shiftedIndexBars.slice(0, len - 1), shiftedLast];
+  }, [candles, shiftedIndexBars, tzOffset]);
 
   const openOrders = orders.filter((o) => o.status === 'filled').map((o) => {
     const mult = o.contractMultiplier ?? getContractMultiplier(o.fillPrice || currentPrice);
@@ -230,6 +306,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
 
   // Push candles to the chart. During playback only the newest candle changes,
   // so append/replace it instead of re-sending the whole history.
+  // Future bars are sent as WhitespaceData to render future timeline tick marks on the lower timeline.
   useEffect(() => {
     const series = seriesApi;
     const volume = volumeRef.current;
@@ -248,17 +325,28 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
     const first = displayCandles[0]?.time ?? 0;
     const last = displayCandles[len - 1];
 
-    if (prev && len > 0 && prev.first === first && (len === prev.len || len === prev.len + 1)) {
-      series.update(toPoint(last));
-      volume.update(toVolume(last));
+    if (prev && len > 0 && prev.first === first && len >= prev.len && len <= prev.len + 100 && last) {
+      if (len === prev.len) {
+        series.update(toPoint(last));
+        volume.update(toVolume(last));
+      } else {
+        for (let i = Math.max(0, prev.len - 1); i < len; i++) {
+          series.update(toPoint(displayCandles[i]));
+          volume.update(toVolume(displayCandles[i]));
+        }
+      }
     } else {
-      series.setData(displayCandles.map(toPoint));
-      volume.setData(displayCandles.map(toVolume));
+      const timelineSeries = buildTimelineSeriesData(candles, engine.index.bars, isOHLC, tzOffset, timeframe);
+      const timelineVolume = buildTimelineVolumeData(candles, engine.index.bars, tzOffset, timeframe);
+      series.setData(timelineSeries);
+      volume.setData(timelineVolume);
       const range = chartApi.timeScale().getVisibleLogicalRange();
-      if (len > 0 && (!range || range.to < len - 1 || range.from > len - 1)) chartApi.timeScale().scrollToPosition(8, false);
+      if (len > 0 && (!range || range.to < len - 1 || range.from > len - 1)) {
+        chartApi.timeScale().scrollToPosition(8, false);
+      }
     }
     rendered.current = { len, first };
-  }, [displayCandles, chartStyle, seriesApi, chartApi]);
+  }, [displayCandles, candles, chartStyle, seriesApi, chartApi, engine.index.bars, timeframe, tzOffset]);
 
   // Trade markers (entries and exits) on the main series.
   const lastDisplayTime = displayCandles[displayCandles.length - 1]?.time;
@@ -285,7 +373,11 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
       }
     }
     const visible = markers.filter((m) => lastDisplayTime == null || (m.time as number) <= lastDisplayTime).sort((a, b) => (a.time as number) - (b.time as number));
-    seriesApi.setMarkers(visible);
+    const key = visible.map((m) => `${m.time}:${m.text}:${m.color}`).join('|');
+    if (key !== prevMarkersRef.current) {
+      prevMarkersRef.current = key;
+      seriesApi.setMarkers(visible);
+    }
   }, [orders, seriesApi, timeframe, tzOffset, lastDisplayTime]);
 
   // Entry / SL / TP price lines for live orders.
@@ -483,6 +575,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
             drawings={drawings}
             onDrawingsChange={setDrawings}
             containerRef={containerRef}
+            timeframe={timeframe}
             orders={orders}
             onUpdateOrder={engine.updateOrder}
             onPlacePendingOrder={(side, price, sl, tp) => engine.placePending(side, price, sl, tp)}

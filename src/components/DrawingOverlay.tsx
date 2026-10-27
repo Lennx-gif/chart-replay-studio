@@ -13,6 +13,7 @@ interface DrawingOverlayProps {
   drawings: Drawing[];
   onDrawingsChange: (drawings: Drawing[]) => void;
   containerRef: React.RefObject<HTMLDivElement>;
+  timeframe?: number;
   orders?: Order[];
   onUpdateOrder?: (orderId: string, updates: { stopLoss?: number; takeProfit?: number; limitPrice?: number }) => void;
   onPlacePendingOrder?: (side: 'buy' | 'sell', price: number, sl?: number, tp?: number) => void;
@@ -60,6 +61,7 @@ export function DrawingOverlay({
   drawings,
   onDrawingsChange,
   containerRef,
+  timeframe = 60,
   orders,
   onUpdateOrder,
   onPlacePendingOrder,
@@ -67,6 +69,8 @@ export function DrawingOverlay({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pendingPointsRef = useRef<DrawingPoint[]>([]);
   const mouseRef = useRef<{ x: number; y: number } | null>(null);
+  const boundsRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
+  const renderFnRef = useRef<(() => void) | null>(null);
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
   const [hoveredDrawingId, setHoveredDrawingId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; drawingId: string } | null>(null);
@@ -93,16 +97,87 @@ export function DrawingOverlay({
 
   const selectedDrawing = drawings.find(d => d.id === selectedDrawingId) || null;
 
+  /**
+   * Resilient time-scale wrapper that supports future blank areas and empty charts.
+   * Extrapolates time and coordinates from the logical axis when data points are unrendered.
+   */
+  const getSafeTimeScale = useCallback((timeScale: any) => {
+    const intervalSec = Math.max(60, Math.round((timeframe || 60) * 60));
+    return {
+      timeToCoordinate: (time: any): number | null => {
+        const direct = timeScale.timeToCoordinate(time);
+        if (direct !== null) return direct;
+        const range = timeScale.getVisibleLogicalRange();
+        if (!range) return null;
+        const fromX = timeScale.logicalToCoordinate(range.from as any);
+        const fromTime = fromX !== null ? (timeScale.coordinateToTime(fromX) as number | null) : null;
+        if (fromTime !== null && fromX !== null) {
+          const targetLogical = (range.from as number) + (Number(time) - fromTime) / intervalSec;
+          return timeScale.logicalToCoordinate(targetLogical as any);
+        }
+        return null;
+      },
+      coordinateToTime: (x: number): number | null => {
+        const direct = timeScale.coordinateToTime(x);
+        if (direct !== null) return direct;
+        const logical = timeScale.coordinateToLogical(x);
+        if (logical !== null) {
+          const range = timeScale.getVisibleLogicalRange();
+          if (range) {
+            const fromX = timeScale.logicalToCoordinate(range.from as any);
+            const fromTime = fromX !== null ? (timeScale.coordinateToTime(fromX) as number | null) : null;
+            if (fromTime !== null) {
+              return Math.round(fromTime + ((logical as number) - (range.from as number)) * intervalSec);
+            }
+          }
+          return Math.round(Date.now() / 1000 + (logical as number) * intervalSec);
+        }
+        return null;
+      },
+      coordinateToLogical: (x: number) => timeScale.coordinateToLogical(x),
+      logicalToCoordinate: (l: any) => timeScale.logicalToCoordinate(l),
+      getVisibleLogicalRange: () => timeScale.getVisibleLogicalRange(),
+    };
+  }, [timeframe]);
+
+  /**
+   * Resilient series wrapper that supports blank charts without rendered bars.
+   */
+  const getSafeSeries = useCallback((seriesApi: any, containerHeight = 500) => {
+    return {
+      priceToCoordinate: (price: number): number | null => {
+        const direct = seriesApi.priceToCoordinate(price);
+        if (direct !== null) return direct;
+        if (containerHeight > 0) {
+          return containerHeight * (1 - Math.max(0, Math.min(100, price)) / 100);
+        }
+        return null;
+      },
+      coordinateToPrice: (y: number): number | null => {
+        const direct = seriesApi.coordinateToPrice(y);
+        if (direct !== null) return direct;
+        if (containerHeight > 0) {
+          return Math.max(0, 100 * (1 - y / containerHeight));
+        }
+        return null;
+      },
+    };
+  }, []);
+
   const getBarAndPrice = useCallback((e: MouseEvent): DrawingPoint | null => {
     if (!chart || !series || !containerRef.current) return null;
     const rect = containerRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const timeCoord = chart.timeScale().coordinateToTime(x);
-    const priceCoord = series.coordinateToPrice(y);
+
+    const safeTimeScale = getSafeTimeScale(chart.timeScale());
+    const safeSeries = getSafeSeries(series, rect.height);
+
+    const timeCoord = safeTimeScale.coordinateToTime(x);
+    const priceCoord = safeSeries.coordinateToPrice(y);
     if (timeCoord === null || priceCoord === null) return null;
-    return { time: timeCoord as number, price: priceCoord };
-  }, [chart, series, containerRef]);
+    return { time: timeCoord, price: priceCoord };
+  }, [chart, series, containerRef, getSafeTimeScale, getSafeSeries]);
 
   const snapPrice = useCallback((price: number) => {
     if (price > 10) return Math.round(price * 100) / 100;
@@ -432,6 +507,7 @@ export function DrawingOverlay({
     // Brush drawing
     if (isBrushing.current && activeTool === 'brush') {
       brushPointsRef.current.push({ x: mx, y: my });
+      renderFnRef.current?.();
       return;
     }
 
@@ -633,6 +709,9 @@ export function DrawingOverlay({
           setHoveredDrawingId(hit?.id || null);
         }
       }
+    }
+    if (activeTool) {
+      renderFnRef.current?.();
     }
   }, [containerRef, chart, series, activeTool, dragState, orderDragState, drawings, snapPrice, onDrawingsChange, selectedDrawing, findAnchorHit, hitTestDrawing, orders]);
 
@@ -862,14 +941,39 @@ export function DrawingOverlay({
     if (!chart || !series || !canvasRef.current || !containerRef.current) return;
     const canvas = canvasRef.current;
     const container = containerRef.current;
-    const dpr = window.devicePixelRatio || 1;
+    let rafId: number | null = null;
+
+    // Fast resize observer that only resets canvas bitmap when physical layout dimensions change
+    const updateCanvasSize = (w: number, h: number) => {
+      const dpr = window.devicePixelRatio || 1;
+      if (w <= 0 || h <= 0) return;
+      if (boundsRef.current.width !== w || boundsRef.current.height !== h) {
+        boundsRef.current = { width: w, height: h };
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
+      }
+    };
+
+    const initialRect = container.getBoundingClientRect();
+    updateCanvasSize(initialRect.width, initialRect.height);
+
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          updateCanvasSize(width, height);
+          scheduleRender();
+        }
+      }
+    });
+    ro.observe(container);
 
     const render = () => {
-      const { width, height } = container.getBoundingClientRect();
-      canvas.width = width * dpr;
-      canvas.height = height * dpr;
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
+      const { width, height } = boundsRef.current;
+      if (width <= 0 || height <= 0) return;
+      const dpr = window.devicePixelRatio || 1;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1062,10 +1166,23 @@ export function DrawingOverlay({
       renderPendingPreview(ctx, series, timeScale, width, height);
     };
 
-    render();
-    chart.timeScale().subscribeVisibleLogicalRangeChange(render);
-    const interval = setInterval(render, 60);
-    return () => { clearInterval(interval); };
+    const scheduleRender = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        render();
+      });
+    };
+
+    renderFnRef.current = scheduleRender;
+    scheduleRender();
+    chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleRender);
+
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(scheduleRender);
+      ro.disconnect();
+    };
   }, [chart, series, drawings, activeTool, containerRef, selectedDrawingId, hoveredDrawingId, snapPrice, orders, orderDragState]);
 
   // --- Render helpers ---

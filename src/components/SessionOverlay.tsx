@@ -13,22 +13,45 @@ interface SessionOverlayProps {
 
 export function SessionOverlay({ chart, containerRef, visibleBars, showSessions, tzOffset = 0 }: SessionOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const sizeRef = useRef({ width: 0, height: 0, dpr: 1 });
 
   useEffect(() => {
     if (!chart || !canvasRef.current || !containerRef.current || !showSessions) return;
 
     const canvas = canvasRef.current;
     const container = containerRef.current;
-    const dpr = window.devicePixelRatio || 1;
+    let rafId: number | null = null;
+
+    // Fast resize observer that only resets canvas bitmap when physical layout dimensions change
+    const updateCanvasSize = (w: number, h: number) => {
+      const dpr = window.devicePixelRatio || 1;
+      if (w <= 0 || h <= 0) return;
+      if (sizeRef.current.width !== w || sizeRef.current.height !== h || sizeRef.current.dpr !== dpr) {
+        sizeRef.current = { width: w, height: h, dpr };
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
+      }
+    };
+
+    const initialRect = container.getBoundingClientRect();
+    updateCanvasSize(initialRect.width, initialRect.height);
+
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          updateCanvasSize(width, height);
+          scheduleRender();
+        }
+      }
+    });
+    ro.observe(container);
 
     const render = () => {
-      const { width, height } = container.getBoundingClientRect();
+      const { width, height, dpr } = sizeRef.current;
       if (width <= 0 || height <= 0) return;
-
-      canvas.width = width * dpr;
-      canvas.height = height * dpr;
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
 
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
@@ -36,17 +59,28 @@ export function SessionOverlay({ chart, containerRef, visibleBars, showSessions,
       ctx.clearRect(0, 0, width, height);
 
       const timeScale = chart.timeScale();
-      if (visibleBars.length === 0) return;
+      const len = visibleBars.length;
+      if (len === 0) return;
+
+      // Restrict iteration strictly to visible on-screen bars to prevent processing thousands of off-screen candles
+      const range = timeScale.getVisibleLogicalRange();
+      const fromIdx = range ? Math.max(0, Math.floor(range.from) - 20) : Math.max(0, len - 300);
+      const toIdx = range ? Math.min(len, Math.ceil(range.to) + 20) : len;
+
+      if (fromIdx >= toIdx) return;
+
+      const tzSec = tzOffset * 3600;
 
       // Draw background bands for each market session taking into account DST
-      for (const session of MARKET_SESSIONS) {
+      for (let sIdx = 0; sIdx < MARKET_SESSIONS.length; sIdx++) {
+        const session = MARKET_SESSIONS[sIdx];
         let inSession = false;
         let sessionStart: number | null = null;
 
-        for (let i = 0; i < visibleBars.length; i++) {
+        for (let i = fromIdx; i < toIdx; i++) {
           const bar = visibleBars[i];
-          // Recover real UTC seconds for exact local DST evaluation
-          const realUtc = bar.time - tzOffset * 3600;
+          // Recover real UTC seconds for fast cached DST evaluation
+          const realUtc = bar.time - tzSec;
           const active = isSessionActive(session, realUtc);
 
           if (active && !inSession) {
@@ -97,10 +131,10 @@ export function SessionOverlay({ chart, containerRef, visibleBars, showSessions,
           }
         }
 
-        // If session is still active at the newest candle
+        // If session is still active at the newest candle in this window
         if (inSession && sessionStart !== null) {
           const x1 = timeScale.timeToCoordinate(sessionStart as any);
-          const lastBar = visibleBars[visibleBars.length - 1];
+          const lastBar = visibleBars[toIdx - 1] || visibleBars[len - 1];
           const x2 = timeScale.timeToCoordinate(lastBar.time as any);
 
           if (x1 !== null && x2 !== null) {
@@ -123,15 +157,13 @@ export function SessionOverlay({ chart, containerRef, visibleBars, showSessions,
       }
 
       // Render currently active sessions banner badge in the top right
-      const lastBar = visibleBars[visibleBars.length - 1];
+      const lastBar = visibleBars[len - 1];
       if (lastBar) {
-        const currentUtc = lastBar.time - tzOffset * 3600;
+        const currentUtc = lastBar.time - tzSec;
         const activeSessions = getActiveMarketSessions(currentUtc);
 
         if (activeSessions.length > 0) {
-          const badgeX = width - 180;
           const badgeY = 12;
-
           ctx.font = '10px JetBrains Mono, monospace';
           const sessionNames = activeSessions.map((s) => s.name).join(' · ');
           const label = `● ${sessionNames} Session`;
@@ -152,11 +184,21 @@ export function SessionOverlay({ chart, containerRef, visibleBars, showSessions,
       }
     };
 
-    render();
-    chart.timeScale().subscribeVisibleLogicalRangeChange(render);
-    const interval = setInterval(render, 150);
+    const scheduleRender = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        render();
+      });
+    };
+
+    scheduleRender();
+    chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleRender);
+
     return () => {
-      clearInterval(interval);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(scheduleRender);
+      ro.disconnect();
     };
   }, [chart, containerRef, visibleBars, showSessions, tzOffset]);
 

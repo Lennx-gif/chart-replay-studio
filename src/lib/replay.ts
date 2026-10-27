@@ -310,3 +310,92 @@ export function detectPricePrecision(raw: OHLCVBar[]): number {
   }
   return Math.min(8, Math.max(2, max));
 }
+
+/**
+ * Generates synthetic whitespace timestamps for a blank chart (when no dataset is loaded).
+ * Creates past and future intervals so the lower timeline is active and drawing tools can work.
+ */
+export function generateBlankChartWhitespace(timeframeMinutes = 60, count = 100, tzOffset = 0): { time: number }[] {
+  const interval = Math.max(60, Math.round(timeframeMinutes * 60));
+  const baseTime = Math.floor(Date.now() / 1000 / interval) * interval + tzOffset * 3600;
+  const start = baseTime - Math.floor(count / 2) * interval;
+  const items: { time: number }[] = [];
+  for (let i = 0; i < count; i++) {
+    items.push({ time: start + i * interval });
+  }
+  return items;
+}
+
+/**
+ * Builds the full timeline for Lightweight Charts:
+ * 1. Revealed bars (up to current replay position) with full OHLC values.
+ * 2. Future bars across the dataset with ONLY `time` (Lightweight Charts WhitespaceData).
+ * This enables viewing all future date/time marks on the lower timeline while keeping the
+ * chart completely unrendered/blank ahead of the current replay position.
+ */
+export function buildTimelineSeriesData(
+  revealedCandles: OHLCVBar[],
+  allCandles: OHLCVBar[],
+  isOHLC: boolean,
+  tzOffset: number,
+  fallbackTimeframe = 60
+): any[] {
+  if (revealedCandles.length === 0 && allCandles.length === 0) {
+    return generateBlankChartWhitespace(fallbackTimeframe, 120, tzOffset);
+  }
+
+  const tzSec = tzOffset * 3600;
+  const result: any[] = [];
+  const revealedLen = revealedCandles.length;
+
+  for (let i = 0; i < revealedLen; i++) {
+    const b = revealedCandles[i];
+    const t = b.time + tzSec;
+    if (isOHLC) {
+      result.push({ time: t, open: b.open, high: b.high, low: b.low, close: b.close });
+    } else {
+      result.push({ time: t, value: b.close });
+    }
+  }
+
+  const totalCandles = allCandles.length;
+  for (let i = revealedLen; i < totalCandles; i++) {
+    result.push({ time: allCandles[i].time + tzSec });
+  }
+
+  return result;
+}
+
+/**
+ * Builds volume data with future whitespace entries to keep timescale aligned.
+ */
+export function buildTimelineVolumeData(
+  revealedCandles: OHLCVBar[],
+  allCandles: OHLCVBar[],
+  tzOffset: number,
+  fallbackTimeframe = 60
+): any[] {
+  if (revealedCandles.length === 0 && allCandles.length === 0) {
+    return generateBlankChartWhitespace(fallbackTimeframe, 120, tzOffset);
+  }
+
+  const tzSec = tzOffset * 3600;
+  const result: any[] = [];
+  const revealedLen = revealedCandles.length;
+
+  for (let i = 0; i < revealedLen; i++) {
+    const b = revealedCandles[i];
+    result.push({
+      time: b.time + tzSec,
+      value: b.volume,
+      color: b.close >= b.open ? 'rgba(76, 175, 80, 0.25)' : 'rgba(224, 83, 71, 0.25)',
+    });
+  }
+
+  const totalCandles = allCandles.length;
+  for (let i = revealedLen; i < totalCandles; i++) {
+    result.push({ time: allCandles[i].time + tzSec });
+  }
+
+  return result;
+}

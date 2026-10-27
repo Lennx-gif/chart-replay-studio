@@ -51,14 +51,13 @@ export const MARKET_SESSIONS: MarketSession[] = [
   },
 ];
 
-/**
- * Calculates the exact UTC offset (in hours) for a given IANA timezone and unix timestamp,
- * seamlessly accounting for Daylight Saving Time (DST) changes.
- */
-export function getTimezoneOffsetHours(timeZone: string, unixSeconds: number): number {
-  try {
-    const d = new Date(unixSeconds * 1000);
-    const dtf = new Intl.DateTimeFormat('en-US', {
+const dtfCache = new Map<string, Intl.DateTimeFormat>();
+const offsetCache = new Map<string, number>();
+
+function getCachedDtf(timeZone: string): Intl.DateTimeFormat {
+  let dtf = dtfCache.get(timeZone);
+  if (!dtf) {
+    dtf = new Intl.DateTimeFormat('en-US', {
       timeZone,
       year: 'numeric',
       month: '2-digit',
@@ -68,6 +67,25 @@ export function getTimezoneOffsetHours(timeZone: string, unixSeconds: number): n
       second: '2-digit',
       hour12: false,
     });
+    dtfCache.set(timeZone, dtf);
+  }
+  return dtf;
+}
+
+/**
+ * Calculates the exact UTC offset (in hours) for a given IANA timezone and unix timestamp,
+ * seamlessly accounting for Daylight Saving Time (DST) changes.
+ * Memoized at the hour-level for high-frequency rendering performance.
+ */
+export function getTimezoneOffsetHours(timeZone: string, unixSeconds: number): number {
+  const hourBucket = Math.floor(unixSeconds / 3600);
+  const cacheKey = `${timeZone}:${hourBucket}`;
+  const cached = offsetCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  try {
+    const d = new Date(unixSeconds * 1000);
+    const dtf = getCachedDtf(timeZone);
     const parts = dtf.formatToParts(d);
     const p: Record<string, string> = {};
     for (const part of parts) p[part.type] = part.value;
@@ -80,9 +98,13 @@ export function getTimezoneOffsetHours(timeZone: string, unixSeconds: number): n
       Number(p.minute),
       Number(p.second)
     );
-    return Math.round((localAsUtc - d.getTime()) / (3600 * 1000));
+    const offset = Math.round((localAsUtc - d.getTime()) / (3600 * 1000));
+    offsetCache.set(cacheKey, offset);
+    return offset;
   } catch {
-    return timeZone === 'America/New_York' ? -5 : 0;
+    const fallback = timeZone === 'America/New_York' ? -5 : 0;
+    offsetCache.set(cacheKey, fallback);
+    return fallback;
   }
 }
 
@@ -95,17 +117,13 @@ export function getNewYorkOffset(unixSeconds: number = Date.now() / 1000): numbe
 
 /**
  * Returns whether a market session is open at the specified unix timestamp,
- * correctly evaluated in that exchange's local time zone with DST.
+ * evaluated via fast integer math with zero string/Intl allocation in hot paths.
  */
 export function isSessionActive(session: MarketSession, unixSeconds: number): boolean {
   try {
-    const d = new Date(unixSeconds * 1000);
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: session.timeZone,
-      hour: 'numeric',
-      hour12: false,
-    });
-    const localHour = Number(formatter.format(d));
+    const offsetHours = getTimezoneOffsetHours(session.timeZone, unixSeconds);
+    const utcHour = Math.floor(unixSeconds / 3600) % 24;
+    const localHour = ((utcHour + offsetHours) % 24 + 24) % 24;
 
     if (session.startHour < session.endHour) {
       return localHour >= session.startHour && localHour < session.endHour;
