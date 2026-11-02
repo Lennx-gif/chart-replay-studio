@@ -14,6 +14,11 @@ interface SessionOverlayProps {
 export function SessionOverlay({ chart, containerRef, visibleBars, showSessions, tzOffset = 0 }: SessionOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sizeRef = useRef({ width: 0, height: 0, dpr: 1 });
+  const visibleBarsRef = useRef(visibleBars);
+  const tzOffsetRef = useRef(tzOffset);
+  const scheduleRenderRef = useRef<() => void>(() => {});
+  visibleBarsRef.current = visibleBars;
+  tzOffsetRef.current = tzOffset;
 
   useEffect(() => {
     if (!chart || !canvasRef.current || !containerRef.current || !showSessions) return;
@@ -48,6 +53,12 @@ export function SessionOverlay({ chart, containerRef, visibleBars, showSessions,
       }
     });
     ro.observe(container);
+    const handleWindowResize = () => {
+      const rect = container.getBoundingClientRect();
+      updateCanvasSize(rect.width, rect.height);
+      scheduleRender();
+    };
+    window.addEventListener('resize', handleWindowResize);
 
     const render = () => {
       const { width, height, dpr } = sizeRef.current;
@@ -59,6 +70,7 @@ export function SessionOverlay({ chart, containerRef, visibleBars, showSessions,
       ctx.clearRect(0, 0, width, height);
 
       const timeScale = chart.timeScale();
+      const visibleBars = visibleBarsRef.current;
       const len = visibleBars.length;
       if (len === 0) return;
 
@@ -69,7 +81,7 @@ export function SessionOverlay({ chart, containerRef, visibleBars, showSessions,
 
       if (fromIdx >= toIdx) return;
 
-      const tzSec = tzOffset * 3600;
+      const tzSec = tzOffsetRef.current * 3600;
 
       // Draw background bands for each market session taking into account DST
       for (let sIdx = 0; sIdx < MARKET_SESSIONS.length; sIdx++) {
@@ -79,16 +91,15 @@ export function SessionOverlay({ chart, containerRef, visibleBars, showSessions,
 
         for (let i = fromIdx; i < toIdx; i++) {
           const bar = visibleBars[i];
-          // Recover real UTC seconds for fast cached DST evaluation
-          const realUtc = bar.time - tzSec;
+          const realUtc = bar.time;
           const active = isSessionActive(session, realUtc);
 
           if (active && !inSession) {
-            sessionStart = bar.time;
+            sessionStart = bar.time + tzSec;
             inSession = true;
           } else if (!active && inSession && sessionStart !== null) {
             const x1 = timeScale.timeToCoordinate(sessionStart as any);
-            const x2 = timeScale.timeToCoordinate(bar.time as any);
+            const x2 = timeScale.timeToCoordinate((bar.time + tzSec) as any);
 
             if (x1 !== null && x2 !== null) {
               const rectX = Math.min(x1, x2);
@@ -135,7 +146,7 @@ export function SessionOverlay({ chart, containerRef, visibleBars, showSessions,
         if (inSession && sessionStart !== null) {
           const x1 = timeScale.timeToCoordinate(sessionStart as any);
           const lastBar = visibleBars[toIdx - 1] || visibleBars[len - 1];
-          const x2 = timeScale.timeToCoordinate(lastBar.time as any);
+          const x2 = timeScale.timeToCoordinate((lastBar.time + tzSec) as any);
 
           if (x1 !== null && x2 !== null) {
             const rectX = Math.min(x1, x2);
@@ -159,8 +170,7 @@ export function SessionOverlay({ chart, containerRef, visibleBars, showSessions,
       // Render currently active sessions banner badge in the top right
       const lastBar = visibleBars[len - 1];
       if (lastBar) {
-        const currentUtc = lastBar.time - tzSec;
-        const activeSessions = getActiveMarketSessions(currentUtc);
+        const activeSessions = getActiveMarketSessions(lastBar.time);
 
         if (activeSessions.length > 0) {
           const badgeY = 12;
@@ -192,15 +202,22 @@ export function SessionOverlay({ chart, containerRef, visibleBars, showSessions,
       });
     };
 
+    scheduleRenderRef.current = scheduleRender;
     scheduleRender();
     chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleRender);
 
     return () => {
       if (rafId !== null) cancelAnimationFrame(rafId);
+      scheduleRenderRef.current = () => {};
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(scheduleRender);
       ro.disconnect();
+      window.removeEventListener('resize', handleWindowResize);
     };
-  }, [chart, containerRef, visibleBars, showSessions, tzOffset]);
+  }, [chart, containerRef, showSessions]);
+
+  useEffect(() => {
+    scheduleRenderRef.current();
+  }, [visibleBars, tzOffset]);
 
   if (!showSessions) return null;
 

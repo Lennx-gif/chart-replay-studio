@@ -1,13 +1,19 @@
 import { useEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 
 export function ParticleBackground() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const { pathname } = useLocation();
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    if (pathname.startsWith('/session/')) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
 
     let animId: number;
     let lastTime = 0;
@@ -40,8 +46,6 @@ export function ParticleBackground() {
       animId = requestAnimationFrame(animate);
 
       if (document.hidden) return;
-      if (typeof window !== 'undefined' && window.location.pathname.startsWith('/session/')) return;
-
       const elapsed = currentTime - lastTime;
       if (elapsed < fpsInterval) return;
       lastTime = currentTime - (elapsed % fpsInterval);
@@ -92,7 +96,7 @@ export function ParticleBackground() {
       cancelAnimationFrame(animId);
       window.removeEventListener('resize', resize);
     };
-  }, []);
+  }, [pathname]);
 
   return (
     <canvas

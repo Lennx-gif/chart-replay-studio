@@ -25,10 +25,10 @@ const queryClient = new QueryClient({
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
-      <ParticleBackground />
       <Toaster />
       <Sonner />
       <BrowserRouter>
+        <ParticleBackground />
         <ErrorBoundary>
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>

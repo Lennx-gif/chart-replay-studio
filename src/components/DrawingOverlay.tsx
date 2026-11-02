@@ -69,7 +69,7 @@ export function DrawingOverlay({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pendingPointsRef = useRef<DrawingPoint[]>([]);
   const mouseRef = useRef<{ x: number; y: number } | null>(null);
-  const boundsRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
+  const boundsRef = useRef<{ width: number; height: number; dpr: number }>({ width: 0, height: 0, dpr: 1 });
   const renderFnRef = useRef<(() => void) | null>(null);
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
   const [hoveredDrawingId, setHoveredDrawingId] = useState<string | null>(null);
@@ -947,8 +947,8 @@ export function DrawingOverlay({
     const updateCanvasSize = (w: number, h: number) => {
       const dpr = window.devicePixelRatio || 1;
       if (w <= 0 || h <= 0) return;
-      if (boundsRef.current.width !== w || boundsRef.current.height !== h) {
-        boundsRef.current = { width: w, height: h };
+      if (boundsRef.current.width !== w || boundsRef.current.height !== h || boundsRef.current.dpr !== dpr) {
+        boundsRef.current = { width: w, height: h, dpr };
         canvas.width = Math.round(w * dpr);
         canvas.height = Math.round(h * dpr);
         canvas.style.width = `${w}px`;
@@ -969,11 +969,16 @@ export function DrawingOverlay({
       }
     });
     ro.observe(container);
+    const handleWindowResize = () => {
+      const rect = container.getBoundingClientRect();
+      updateCanvasSize(rect.width, rect.height);
+      scheduleRender();
+    };
+    window.addEventListener('resize', handleWindowResize);
 
     const render = () => {
-      const { width, height } = boundsRef.current;
+      const { width, height, dpr } = boundsRef.current;
       if (width <= 0 || height <= 0) return;
-      const dpr = window.devicePixelRatio || 1;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1182,6 +1187,7 @@ export function DrawingOverlay({
       if (rafId !== null) cancelAnimationFrame(rafId);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(scheduleRender);
       ro.disconnect();
+      window.removeEventListener('resize', handleWindowResize);
     };
   }, [chart, series, drawings, activeTool, containerRef, selectedDrawingId, hoveredDrawingId, snapPrice, orders, orderDragState]);
 

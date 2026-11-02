@@ -18,6 +18,16 @@ describe('timezone engine', () => {
     expect(getTimezoneOffsetHours('America/New_York', winterSec)).toBe(-5);
   });
 
+  it('keeps midnight offsets correct and switches at the DST boundary', () => {
+    const midnightSec = 1721016000; // 2024-07-15 00:00 EDT
+    expect(getTimezoneOffsetHours('America/New_York', midnightSec)).toBe(-4);
+
+    const beforeDst = Date.parse('2024-03-10T06:59:59Z') / 1000;
+    const afterDst = Date.parse('2024-03-10T07:00:00Z') / 1000;
+    expect(getTimezoneOffsetHours('America/New_York', beforeDst)).toBe(-5);
+    expect(getTimezoneOffsetHours('America/New_York', afterDst)).toBe(-4);
+  });
+
   it('determines when New York market session is active (08:00 - 17:00 local time)', () => {
     const nySession = MARKET_SESSIONS.find((s) => s.id === 'newyork')!;
     expect(nySession).toBeDefined();
