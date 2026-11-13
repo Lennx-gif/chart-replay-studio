@@ -66,26 +66,26 @@ export const ALL_TOOLS: ToolDef[] = [
   // Cursor
   { type: null, label: 'Cursor', shortcut: 'Esc', category: 'cursor' },
   // Lines
-  { type: 'horizontal', label: 'Horizontal Line', shortcut: 'H', category: 'lines' },
-  { type: 'vertical', label: 'Vertical Line', shortcut: 'V', category: 'lines' },
-  { type: 'trendline', label: 'Trend Line', shortcut: 'T', category: 'lines' },
-  { type: 'ray', label: 'Ray', shortcut: 'R', category: 'lines' },
+  { type: 'horizontal', label: 'Horizontal Line', shortcut: 'Alt+H', category: 'lines' },
+  { type: 'vertical', label: 'Vertical Line', shortcut: 'Alt+V', category: 'lines' },
+  { type: 'trendline', label: 'Trend Line', shortcut: 'Alt+T', category: 'lines' },
+  { type: 'ray', label: 'Ray', category: 'lines' },
   { type: 'extended_line', label: 'Extended Line', category: 'lines' },
   { type: 'info_line', label: 'Info Line', category: 'lines' },
   // Fibonacci
-  { type: 'fibonacci', label: 'Fib Retracement', shortcut: 'F', category: 'fibonacci' },
+  { type: 'fibonacci', label: 'Fib Retracement', shortcut: 'Alt+F', category: 'fibonacci' },
   { type: 'fib_extension', label: 'Fib Extension', category: 'fibonacci' },
   { type: 'pitchfork', label: 'Pitchfork', category: 'fibonacci' },
   // Shapes
-  { type: 'rectangle', label: 'Rectangle', category: 'shapes' },
+  { type: 'rectangle', label: 'Rectangle', shortcut: 'Alt+R', category: 'shapes' },
   { type: 'ellipse', label: 'Ellipse', category: 'shapes' },
   { type: 'triangle', label: 'Triangle', category: 'shapes' },
-  { type: 'brush', label: 'Brush', shortcut: 'B', category: 'shapes' },
+  { type: 'brush', label: 'Brush', category: 'shapes' },
   // Positions
-  { type: 'position_long', label: 'Long Position', shortcut: 'L', category: 'positions' },
-  { type: 'position_short', label: 'Short Position', shortcut: 'S', category: 'positions' },
+  { type: 'position_long', label: 'Long Position', category: 'positions' },
+  { type: 'position_short', label: 'Short Position', category: 'positions' },
   // Measure
-  { type: 'measure', label: 'Measure', shortcut: 'M', category: 'measure' },
+  { type: 'measure', label: 'Measure', shortcut: 'Alt+M', category: 'measure' },
   { type: 'price_range', label: 'Price Range', category: 'measure' },
   // Text
   { type: 'text', label: 'Text Note', category: 'text' },

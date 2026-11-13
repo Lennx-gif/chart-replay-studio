@@ -5,7 +5,7 @@ import {
 import { detectBaseTimeframe, type OHLCVBar } from '@/lib/csvParser';
 import type { Drawing, DrawingType } from '@/lib/drawings';
 import type { ChartStyle, SessionRecord } from '@/lib/db';
-import { calculateStats, getContractMultiplier } from '@/lib/tradeEngine';
+import { calculateStats, getContractMultiplier, calculateSessionLedger, partialCloseOrder, setBreakEven } from '@/lib/tradeEngine';
 import {
   SPEEDS,
   buildTimeframeIndex,
@@ -16,6 +16,7 @@ import {
 import { getNewYorkOffset } from '@/lib/timezone';
 import { useReplayEngine } from '@/hooks/useReplayEngine';
 import { useSessionAutosave } from '@/hooks/useSessionAutosave';
+import { useWorkspaceShortcuts } from '@/hooks/useWorkspaceShortcuts';
 import { ChartToolbar } from './ChartToolbar';
 import { ReplayControls } from './ReplayControls';
 import { BookmarksMenu } from './BookmarksMenu';
@@ -27,9 +28,10 @@ import { TradePanel } from './TradePanel';
 import { TradeJournal } from './TradeJournal';
 import { GoToDate } from './GoToDate';
 import { SessionOverlay } from './SessionOverlay';
-import { BalanceSettings } from './BalanceSettings';
+import { AccountEquityPopover } from './AccountEquityPopover';
 import { SessionDashboardModal } from './SessionDashboardModal';
-import { Globe, BarChart3, BookOpen, Columns, Eye, EyeOff, CandlestickChart, LineChart, BarChart } from 'lucide-react';
+import { Globe, BarChart3, BookOpen, Columns, Eye, EyeOff, CandlestickChart, LineChart, BarChart, ArrowRightLeft } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface ChartViewProps {
   session: SessionRecord;
@@ -192,16 +194,48 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
   const [showDashboard, setShowDashboard] = useState(false);
   const [showMultiChart, setShowMultiChart] = useState(false);
   const [showSessions, setShowSessions] = useState(true);
+  const [showTradeMarkers, setShowTradeMarkers] = useState(true);
+  const [tradePanelTab, setTradePanelTab] = useState<'trade' | 'positions' | 'news' | 'analytics'>('trade');
+  const [tradePanelCollapsed, setTradePanelCollapsed] = useState(false);
 
   const baseTimeframe = useMemo(() => detectBaseTimeframe(rawBars), [rawBars]);
   const precision = useMemo(() => detectPricePrecision(rawBars), [rawBars]);
+
+  // Auto-default to intra-bar sub-timeframe streaming on higher timeframes (15m+)
+  useEffect(() => {
+    if (timeframe >= 15 && baseTimeframe <= 1 && stepUnit === 'candle') {
+      engine.setStepUnit('1m');
+    }
+  }, [timeframe, baseTimeframe, stepUnit, engine]);
 
   // ------------------------------------------------------------ derived data
   const lastRaw = rawBars[position - 1];
   const lastCandle = candles[candles.length - 1];
   const currentPrice = lastRaw?.close ?? 0;
   const stats = useMemo(() => calculateStats(orders, startingBalance), [orders, startingBalance]);
+  const ledger = useMemo(
+    () => calculateSessionLedger(startingBalance, orders, currentPrice, session.leverage ?? 100, session.symbol),
+    [startingBalance, orders, currentPrice, session.leverage, session.symbol]
+  );
   const tzSec = tzOffset * 3600;
+
+  const handlePartialClose = useCallback((orderId: string, ratio: number) => {
+    const o = orders.find((ord) => ord.id === orderId);
+    const bar = rawBars[position - 1];
+    if (!o || !bar) return;
+    const res = partialCloseOrder(o, ratio, bar.close, bar.time, session.symbol);
+    if (res) {
+      engine.setOrders((prev) => prev.map((item) => (item.id === orderId ? res.remainingOrder : item)).concat(res.closedSlice));
+      toast.success(`Closed ${(ratio * 100).toFixed(0)}% of position`);
+    }
+  }, [orders, rawBars, position, session.symbol, engine]);
+
+  const handleSetBreakEven = useCallback((orderId: string) => {
+    const o = orders.find((ord) => ord.id === orderId);
+    if (!o || o.fillPrice == null) return;
+    engine.updateOrder(orderId, { stopLoss: o.fillPrice });
+    toast.success('Stop Loss moved to Break-Even');
+  }, [orders, engine]);
 
   const openOrders = orders.filter((o) => o.status === 'filled').map((o) => {
     const mult = o.contractMultiplier ?? getContractMultiplier(o.fillPrice || currentPrice);
@@ -221,7 +255,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
   // ---------------------------------------------------------------- autosave
   const { status: saveStatus, saveNow } = useSessionAutosave(session.id, {
     name, notes, position, startPosition, speed, stepUnit, timeframe, tzOffset, chartStyle, pauseOnTradeEvents,
-    bookmarks, startingBalance, orders, drawings, totalBars: total, closedTrades: stats.totalTrades, realizedPnl: stats.totalPnl,
+    bookmarks, startingBalance, orders, drawings, totalBars: total, closedTrades: ledger.closedTradesCount, realizedPnl: ledger.realizedPnl,
   });
 
   // ------------------------------------------------------------------- chart
@@ -335,7 +369,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
       prev.tzOffset === tzOffset &&
       prev.bars === engine.index.bars &&
       len >= prev.len &&
-      len <= prev.len + 100 &&
+      len <= prev.len + 2000 &&
       last
     ) {
       if (len === prev.len) {
@@ -351,17 +385,24 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
       series.setData(candles.map(toPoint));
       volume.setData(candles.map(toVolume));
       const range = chartApi.timeScale().getVisibleLogicalRange();
-      if (len > 0 && (!range || range.to < len - 1 || range.from > len - 1)) {
+      if (!isPlaying && len > 0 && (!range || range.to < len - 1 || range.from > len - 1)) {
         chartApi.timeScale().scrollToPosition(8, false);
       }
     }
     rendered.current = { len, first, timeframe, tzOffset, bars: engine.index.bars };
-  }, [candles, chartStyle, seriesApi, chartApi, engine.index.bars, timeframe, tzOffset, tzSec]);
+  }, [candles, chartStyle, seriesApi, chartApi, engine.index.bars, timeframe, tzOffset, tzSec, isPlaying]);
 
   // Trade markers (entries and exits) on the main series.
   const lastDisplayTime = candles.length > 0 ? candles[candles.length - 1].time + tzSec : undefined;
   useEffect(() => {
     if (!seriesApi) return;
+    if (!showTradeMarkers) {
+      if (prevMarkersRef.current !== 'empty') {
+        prevMarkersRef.current = 'empty';
+        seriesApi.setMarkers([]);
+      }
+      return;
+    }
     const secs = Math.max(1, Math.round(timeframe * 60));
     const toCandleTime = (t: number) => (Math.floor(t / secs) * secs + tzOffset * 3600) as Time;
     const markers: SeriesMarker<Time>[] = [];
@@ -388,7 +429,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
       prevMarkersRef.current = key;
       seriesApi.setMarkers(visible);
     }
-  }, [orders, seriesApi, timeframe, tzOffset, lastDisplayTime]);
+  }, [orders, seriesApi, timeframe, tzOffset, lastDisplayTime, showTradeMarkers]);
 
   // Entry / SL / TP price lines for live orders.
   useEffect(() => {
@@ -430,40 +471,16 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
     engine.setSpeed(next);
   }, [speed, engine]);
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement || t?.isContentEditable) return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const amount = e.shiftKey ? 10 : 1;
-      switch (e.key) {
-        case ' ': e.preventDefault(); engine.togglePlay(); break;
-        case 'ArrowRight': e.preventDefault(); engine.step(amount); break;
-        case 'ArrowLeft': e.preventDefault(); engine.step(-amount); break;
-        case 'Home': e.preventDefault(); engine.restart(); break;
-        case 'End': e.preventDefault(); engine.seek(total); break;
-        case '+': case '=': changeSpeed(1); break;
-        case '-': case '_': changeSpeed(-1); break;
-        case 'k': case 'K': engine.addBookmark(); break;
-        case ']': engine.jumpBookmark(1); break;
-        case '[': engine.jumpBookmark(-1); break;
-        case 'Escape': setActiveTool(null); break;
-        case 'h': case 'H': setActiveTool('horizontal'); break;
-        case 't': case 'T': setActiveTool('trendline'); break;
-        case 'f': case 'F': setActiveTool('fibonacci'); break;
-        case 'r': case 'R': setActiveTool('ray'); break;
-        case 'v': setActiveTool('vertical'); break;
-        case 'b': case 'B': setActiveTool('brush'); break;
-        case 'l': setActiveTool('position_long'); break;
-        case 's': setActiveTool('position_short'); break;
-        case 'm': setActiveTool('measure'); break;
-        case 'j': case 'J': setShowJournal((p) => !p); break;
-        case 'd': case 'D': setShowDashboard((p) => !p); break;
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [engine, total, changeSpeed]);
+  useWorkspaceShortcuts({
+    onSelectTool: setActiveTool,
+    onTogglePlay: engine.togglePlay,
+    onStep: engine.step,
+    onChangeSpeed: changeSpeed,
+    onToggleJournal: () => setShowJournal((p) => !p),
+    onToggleDashboard: () => setShowDashboard((p) => !p),
+    onAddBookmark: engine.addBookmark,
+    onJumpBookmark: engine.jumpBookmark,
+  });
 
   // Multi-timeframe sidebar: the next three timeframes above the one on the chart.
   const multiTFs = useMemo(() => {
@@ -511,7 +528,14 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
 
         <div className="flex items-center gap-2.5 shrink-0">
           {stats.totalTrades > 0 && (
-            <div className="flex items-center gap-2 text-[10px] font-mono px-2 py-0.5 rounded bg-secondary/40 border border-border/50">
+            <button
+              onClick={() => {
+                setTradePanelTab('analytics');
+                setTradePanelCollapsed(false);
+              }}
+              className="flex items-center gap-2 text-[10px] font-mono px-2 py-0.5 rounded bg-secondary/40 hover:bg-secondary/70 border border-border/50 hover:border-primary/40 cursor-pointer transition-all active:scale-95"
+              title="Click to view detailed Session Analytics"
+            >
               <span className={stats.totalPnl >= 0 ? 'text-long font-semibold' : 'text-short font-semibold'}>
                 {stats.totalPnl >= 0 ? '+' : ''}${stats.totalPnl.toFixed(2)}
               </span>
@@ -519,7 +543,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
               <span className="text-muted-foreground">WR {stats.winRate.toFixed(0)}%</span>
               <span className="text-muted-foreground">·</span>
               <span className="text-muted-foreground">{stats.totalTrades}T</span>
-            </div>
+            </button>
           )}
 
           {lastCandle && (
@@ -538,6 +562,10 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
           </div>
 
           <div className="flex items-center gap-1">
+            <button className={`toolbar-btn text-xs gap-1 ${showTradeMarkers ? 'toolbar-btn-active' : ''}`} onClick={() => setShowTradeMarkers((p) => !p)} title="Toggle historical trade markers on chart">
+              <ArrowRightLeft size={12} />
+              <span className="hidden lg:inline">Markers</span>
+            </button>
             <button className={`toolbar-btn text-xs gap-1 ${showSessions ? 'toolbar-btn-active' : ''}`} onClick={() => setShowSessions((p) => !p)} title="Toggle market sessions">
               {showSessions ? <Eye size={12} /> : <EyeOff size={12} />}
               <span className="hidden lg:inline">Sessions</span>
@@ -560,7 +588,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
             </button>
           </div>
 
-          <BalanceSettings balance={startingBalance} onBalanceChange={setStartingBalance} />
+          <AccountEquityPopover ledger={ledger} onBalanceChange={setStartingBalance} />
         </div>
       </div>
 
@@ -602,14 +630,25 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
 
         <TradePanel
           currentPrice={currentPrice}
+          symbol={session.symbol}
+          tzOffset={tzOffset}
+          activeTab={tradePanelTab}
+          onTabChange={setTradePanelTab}
+          collapsed={tradePanelCollapsed}
+          onToggleCollapse={setTradePanelCollapsed}
           onPlaceOrder={engine.placeMarket}
+          onPlacePending={(side, price, sl, tp, size) => engine.placePending(side, price, sl, tp, size ?? 1)}
           onCloseOrder={engine.closeOrder}
+          onPartialClose={handlePartialClose}
+          onSetBreakEven={handleSetBreakEven}
           onUpdateOrder={engine.updateOrder}
           onCloseAll={engine.closeAll}
           onCancelOrder={engine.cancelOrder}
-          openOrders={openOrders}
-          pendingOrders={pendingOrders}
+          orders={orders}
+          ledger={ledger}
           startingBalance={startingBalance}
+          currentReplayTime={lastRaw?.time}
+          onSeekTime={engine.seekToTime}
         />
 
         {showJournal && <TradeJournal orders={orders} onClose={() => setShowJournal(false)} startingBalance={startingBalance} />}
@@ -638,6 +677,8 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
         onSpeedChange={engine.setSpeed}
         stepUnit={stepUnit}
         onStepUnitChange={engine.setStepUnit}
+        timeframe={timeframe}
+        baseTimeframe={baseTimeframe}
         pauseOnTradeEvents={pauseOnTradeEvents}
         onPauseOnTradeEventsChange={engine.setPauseOnTradeEvents}
         position={position}

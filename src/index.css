@@ -113,10 +113,10 @@
 
 @layer components {
   .toolbar-btn {
-    @apply flex items-center justify-center px-2.5 py-1.5 rounded text-xs font-medium
+    @apply flex items-center justify-center px-2.5 h-7 rounded text-xs font-medium
            bg-secondary text-secondary-foreground border border-border
            hover:bg-accent hover:text-accent-foreground
-           transition-all duration-150 cursor-pointer select-none;
+           transition-all duration-150 cursor-pointer select-none leading-none;
   }
 
   .toolbar-btn-active {

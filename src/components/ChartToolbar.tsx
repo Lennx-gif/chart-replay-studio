@@ -82,6 +82,8 @@ export function ChartToolbar({ activeTool, onToolChange, onClearDrawings, drawin
           <>
             {favorites.map(fav => {
               const key = String(fav);
+              const tool = ALL_TOOLS.find(t => t.type === fav);
+              const tooltip = tool ? `${tool.label}${tool.shortcut ? ` (${tool.shortcut})` : ''}` : 'Cursor (Esc)';
               return (
                 <button
                   key={key}
@@ -89,7 +91,7 @@ export function ChartToolbar({ activeTool, onToolChange, onClearDrawings, drawin
                     activeTool === fav ? 'text-primary bg-primary/10' : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
                   }`}
                   onClick={() => handleToolSelect(fav)}
-                  title={ALL_TOOLS.find(t => t.type === fav)?.label || 'Cursor'}
+                  title={tooltip}
                 >
                   {TOOL_ICONS[key] || <Star size={14} />}
                   <Star size={6} className="absolute top-0.5 right-0.5 text-primary fill-primary" />

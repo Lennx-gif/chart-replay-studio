@@ -82,6 +82,7 @@ export function SessionOverlay({ chart, containerRef, visibleBars, showSessions,
       if (fromIdx >= toIdx) return;
 
       const tzSec = tzOffsetRef.current * 3600;
+      const placedBadges: { x1: number; x2: number; y: number }[] = [];
 
       // Draw background bands for each market session taking into account DST
       for (let sIdx = 0; sIdx < MARKET_SESSIONS.length; sIdx++) {
@@ -119,14 +120,21 @@ export function SessionOverlay({ chart, containerRef, visibleBars, showSessions,
               ctx.stroke();
               ctx.setLineDash([]);
 
-              // Session label badge
+              // Session label badge with smart collision offset
               ctx.font = '10px JetBrains Mono, monospace';
               const labelText = `${session.name} Open`;
               const textWidth = ctx.measureText(labelText).width;
+              const badgeX = rectX + 4;
+              const badgeW = textWidth + 10;
+              let badgeY = 8;
+              while (placedBadges.some(b => Math.abs(b.y - badgeY) < 18 && !(badgeX + badgeW < b.x1 || badgeX > b.x2))) {
+                badgeY += 22;
+              }
+              placedBadges.push({ x1: badgeX, x2: badgeX + badgeW, y: badgeY });
 
               ctx.fillStyle = 'rgba(24, 19, 14, 0.85)';
               ctx.beginPath();
-              ctx.roundRect(rectX + 4, 8, textWidth + 10, 18, 4);
+              ctx.roundRect(badgeX, badgeY, badgeW, 18, 4);
               ctx.fill();
 
               ctx.strokeStyle = session.borderColor;
@@ -134,7 +142,7 @@ export function SessionOverlay({ chart, containerRef, visibleBars, showSessions,
               ctx.stroke();
 
               ctx.fillStyle = session.borderColor;
-              ctx.fillText(labelText, rectX + 9, 21);
+              ctx.fillText(labelText, badgeX + 5, badgeY + 13);
             }
 
             inSession = false;

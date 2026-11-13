@@ -1,4 +1,5 @@
 import type { OHLCVBar } from './csvParser';
+import { getInstrumentSpec } from './currency';
 
 export type OrderSide = 'buy' | 'sell';
 export type OrderType = 'market' | 'limit' | 'stop';
@@ -47,6 +48,19 @@ export interface RiskCalculation {
   riskAmount: number;    // Total $ risked (e.g. $100)
   pipValue: number;      // Dollar value of 1 pip for 1.0 standard lot
   pips: number;          // Stop loss distance in pips
+}
+
+export interface SessionLedger {
+  initialBalance: number;
+  realizedPnl: number;
+  currentBalance: number;
+  unrealizedPnl: number;
+  currentEquity: number;
+  usedMargin: number;
+  freeMargin: number;
+  marginLevel: number;
+  closedTradesCount: number;
+  winRate: number;
 }
 
 /**
@@ -375,5 +389,332 @@ export function calculateStats(orders: Order[], startingBalance: number = 10000)
         ? grossWin / wins.length / (grossLoss / losses.length)
         : 0,
     equityCurve,
+  };
+}
+
+/**
+ * Deterministic account balance and equity state machine.
+ * Prevents account equity from resetting to starting balance after trade closes.
+ */
+export function calculateSessionLedger(
+  initialBalance: number,
+  orders: Order[],
+  currentPrice: number,
+  leverage: number = 100,
+  symbol: string = 'EURUSD'
+): SessionLedger {
+  const spec = getInstrumentSpec(symbol, currentPrice);
+  const pipValue = spec.getPipValuePerLot(currentPrice);
+
+  let realizedPnl = 0;
+  let closedCount = 0;
+  let winsCount = 0;
+
+  let unrealizedPnl = 0;
+  let usedMargin = 0;
+
+  for (const o of orders) {
+    if (o.status === 'closed' && o.pnl != null) {
+      realizedPnl += o.pnl;
+      closedCount++;
+      if (o.pnl > 0) winsCount++;
+    } else if (o.status === 'filled' && o.fillPrice != null) {
+      const entry = o.fillPrice;
+      const diff = o.side === 'buy' ? currentPrice - entry : entry - currentPrice;
+      const diffPips = diff / spec.pipSize;
+      const pnl = diffPips * (pipValue * o.size);
+      unrealizedPnl += pnl;
+
+      const positionNotional = o.size * spec.contractSize * (spec.quoteCurrency === 'USD' ? currentPrice : 1);
+      usedMargin += positionNotional / Math.max(1, leverage);
+    }
+  }
+
+  const currentBalance = initialBalance + realizedPnl;
+  const currentEquity = currentBalance + unrealizedPnl;
+  const freeMargin = Math.max(0, currentEquity - usedMargin);
+  const marginLevel = usedMargin > 0 ? (currentEquity / usedMargin) * 100 : 0;
+  const winRate = closedCount > 0 ? (winsCount / closedCount) * 100 : 0;
+
+  return {
+    initialBalance,
+    realizedPnl,
+    currentBalance,
+    unrealizedPnl,
+    currentEquity,
+    usedMargin,
+    freeMargin,
+    marginLevel,
+    closedTradesCount: closedCount,
+    winRate,
+  };
+}
+
+/**
+ * Close a partial percentage of an open position.
+ */
+export function partialCloseOrder(
+  order: Order,
+  closeRatio: number,
+  currentPrice: number,
+  currentTime: number,
+  symbol: string = 'EURUSD'
+): { remainingOrder: Order; closedSlice: Order } | null {
+  if (order.status !== 'filled' || order.fillPrice == null || closeRatio <= 0 || closeRatio >= 1) {
+    return null;
+  }
+  const spec = getInstrumentSpec(symbol, currentPrice);
+  const pipValue = spec.getPipValuePerLot(currentPrice);
+  const entry = order.fillPrice;
+  const diff = order.side === 'buy' ? currentPrice - entry : entry - currentPrice;
+  const pnlPips = diff / spec.pipSize;
+
+  const closedSize = Math.max(0.01, Math.round(order.size * closeRatio * 100) / 100);
+  const remainingSize = Math.max(0.01, Math.round((order.size - closedSize) * 100) / 100);
+
+  const closedSlice: Order = {
+    ...order,
+    id: createOrderId(),
+    size: closedSize,
+    status: 'closed',
+    closePrice: currentPrice,
+    closeTime: currentTime,
+    closeReason: 'manual',
+    pnl: pnlPips * (pipValue * closedSize),
+    pnlPips,
+  };
+
+  const remainingOrder: Order = {
+    ...order,
+    size: remainingSize,
+  };
+
+  return { remainingOrder, closedSlice };
+}
+
+/**
+ * Move stop loss directly to fill price (break even).
+ */
+export function setBreakEven(order: Order): Order {
+  if (order.status !== 'filled' || order.fillPrice == null) return order;
+  return {
+    ...order,
+    stopLoss: order.fillPrice,
+  };
+}
+
+export interface SessionAnalyticsData {
+  totalTrades: number;
+  closedTrades: number;
+  openTrades: number;
+  wins: number;
+  losses: number;
+  breakEvens: number;
+  winRate: number; // 0 to 100
+  netPnl: number;
+  netReturnPct: number;
+  grossProfit: number;
+  grossLoss: number;
+  profitFactor: number;
+  expectancy: number; // $ per trade
+  expectancyR: number; // in R
+  avgWin: number;
+  avgLoss: number;
+  winLossRatio: number;
+  maxDrawdown: number;
+  maxDrawdownPct: number;
+  equityCurve: { tradeIndex: number; equity: number; pnl: number; time: number; side?: string }[];
+  hourlyStats: { hour: number; label: string; count: number; wins: number; winRate: number; pnl: number }[];
+  sessionStats: { session: string; label: string; timeRange: string; count: number; wins: number; winRate: number; pnl: number }[];
+  weekdayStats: { day: number; label: string; count: number; wins: number; winRate: number; pnl: number }[];
+}
+
+export function calculateSessionAnalytics(
+  orders: Order[],
+  startingBalance: number,
+  tzOffset = 0
+): SessionAnalyticsData {
+  const closed = orders.filter((o) => o.status === 'closed' && o.pnl != null);
+  const openCount = orders.filter((o) => o.status === 'filled').length;
+
+  let grossProfit = 0;
+  let grossLoss = 0;
+  let wins = 0;
+  let losses = 0;
+  let breakEvens = 0;
+
+  // Hourly buckets: 0..23 (adjusted by tzOffset)
+  const hours = Array.from({ length: 24 }, (_, i) => ({
+    hour: i,
+    label: `${String(i).padStart(2, '0')}:00`,
+    count: 0,
+    wins: 0,
+    winRate: 0,
+    pnl: 0,
+  }));
+
+  // Forex Sessions based on UTC hours (Sydney: 21-06, Tokyo: 00-09, London: 07-16, New York: 12-21)
+  const sessionsMap: Record<string, { label: string; timeRange: string; count: number; wins: number; winRate: number; pnl: number }> = {
+    sydney: { label: 'Sydney', timeRange: '21:00 - 06:00 UTC', count: 0, wins: 0, winRate: 0, pnl: 0 },
+    tokyo: { label: 'Tokyo', timeRange: '00:00 - 09:00 UTC', count: 0, wins: 0, winRate: 0, pnl: 0 },
+    london: { label: 'London', timeRange: '07:00 - 16:00 UTC', count: 0, wins: 0, winRate: 0, pnl: 0 },
+    newyork: { label: 'New York', timeRange: '12:00 - 21:00 UTC', count: 0, wins: 0, winRate: 0, pnl: 0 },
+  };
+
+  // Weekdays: 1..5 (Mon..Fri)
+  const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const weekdays = [1, 2, 3, 4, 5].map((d) => ({
+    day: d,
+    label: weekdayNames[d],
+    count: 0,
+    wins: 0,
+    winRate: 0,
+    pnl: 0,
+  }));
+
+  let currentEquity = startingBalance;
+  let peakEquity = startingBalance;
+  let maxDrawdown = 0;
+  let maxDrawdownPct = 0;
+
+  const equityCurve: SessionAnalyticsData['equityCurve'] = [
+    { tradeIndex: 0, equity: startingBalance, pnl: 0, time: 0 },
+  ];
+
+  // Sort closed orders by fillTime / closeTime ascending
+  const sorted = [...closed].sort((a, b) => (a.closeTime ?? a.fillTime ?? 0) - (b.closeTime ?? b.fillTime ?? 0));
+
+  sorted.forEach((o, idx) => {
+    const pnl = o.pnl ?? 0;
+    if (pnl > 0.0001) {
+      wins++;
+      grossProfit += pnl;
+    } else if (pnl < -0.0001) {
+      losses++;
+      grossLoss += Math.abs(pnl);
+    } else {
+      breakEvens++;
+    }
+
+    currentEquity += pnl;
+    if (currentEquity > peakEquity) {
+      peakEquity = currentEquity;
+    }
+    const dd = peakEquity - currentEquity;
+    if (dd > maxDrawdown) {
+      maxDrawdown = dd;
+    }
+    const ddPct = peakEquity > 0 ? (dd / peakEquity) * 100 : 0;
+    if (ddPct > maxDrawdownPct) {
+      maxDrawdownPct = ddPct;
+    }
+
+    equityCurve.push({
+      tradeIndex: idx + 1,
+      equity: currentEquity,
+      pnl,
+      time: o.closeTime ?? o.fillTime ?? 0,
+      side: o.side,
+    });
+
+    // Time attribution based strictly on simulated historical trade time
+    const tradeTime = o.fillTime ?? o.createdTime ?? 0;
+    if (tradeTime > 0) {
+      // Adjusted by timezone offset in hours
+      const date = new Date((tradeTime + tzOffset * 3600) * 1000);
+      const h = date.getUTCHours();
+      if (hours[h]) {
+        hours[h].count++;
+        hours[h].pnl += pnl;
+        if (pnl > 0) hours[h].wins++;
+      }
+
+      // Weekday (0=Sun, 1=Mon, ..., 6=Sat)
+      const day = date.getUTCDay();
+      const targetDay = day === 0 ? 1 : day === 6 ? 5 : day; // fold weekend into Mon/Fri
+      const wIdx = targetDay - 1;
+      if (wIdx >= 0 && wIdx < weekdays.length) {
+        weekdays[wIdx].count++;
+        weekdays[wIdx].pnl += pnl;
+        if (pnl > 0) weekdays[wIdx].wins++;
+      }
+
+      // Check Forex Killzones (UTC hour)
+      const utcDate = new Date(tradeTime * 1000);
+      const utcH = utcDate.getUTCHours();
+      if (utcH >= 21 || utcH < 6) {
+        sessionsMap.sydney.count++;
+        sessionsMap.sydney.pnl += pnl;
+        if (pnl > 0) sessionsMap.sydney.wins++;
+      }
+      if (utcH >= 0 && utcH < 9) {
+        sessionsMap.tokyo.count++;
+        sessionsMap.tokyo.pnl += pnl;
+        if (pnl > 0) sessionsMap.tokyo.wins++;
+      }
+      if (utcH >= 7 && utcH < 16) {
+        sessionsMap.london.count++;
+        sessionsMap.london.pnl += pnl;
+        if (pnl > 0) sessionsMap.london.wins++;
+      }
+      if (utcH >= 12 && utcH < 21) {
+        sessionsMap.newyork.count++;
+        sessionsMap.newyork.pnl += pnl;
+        if (pnl > 0) sessionsMap.newyork.wins++;
+      }
+    }
+  });
+
+  // Calculate win rates
+  hours.forEach((h) => {
+    h.winRate = h.count > 0 ? (h.wins / h.count) * 100 : 0;
+  });
+  weekdays.forEach((w) => {
+    w.winRate = w.count > 0 ? (w.wins / w.count) * 100 : 0;
+  });
+  Object.values(sessionsMap).forEach((s) => {
+    s.winRate = s.count > 0 ? (s.wins / s.count) * 100 : 0;
+  });
+
+  const netPnl = grossProfit - grossLoss;
+  const netReturnPct = startingBalance > 0 ? (netPnl / startingBalance) * 100 : 0;
+  const totalClosed = closed.length;
+  const winRate = totalClosed > 0 ? (wins / totalClosed) * 100 : 0;
+  const avgWin = wins > 0 ? grossProfit / wins : 0;
+  const avgLoss = losses > 0 ? grossLoss / losses : 0;
+  const winLossRatio = avgLoss > 0 ? avgWin / avgLoss : avgWin > 0 ? avgWin : 1;
+  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0;
+  const expectancy = totalClosed > 0 ? netPnl / totalClosed : 0;
+  const expectancyR = avgLoss > 0 ? (winRate / 100) * winLossRatio - (1 - winRate / 100) : 0;
+
+  return {
+    totalTrades: orders.length,
+    closedTrades: totalClosed,
+    openTrades: openCount,
+    wins,
+    losses,
+    breakEvens,
+    winRate,
+    netPnl,
+    netReturnPct,
+    grossProfit,
+    grossLoss,
+    profitFactor,
+    expectancy,
+    expectancyR,
+    avgWin,
+    avgLoss,
+    winLossRatio,
+    maxDrawdown,
+    maxDrawdownPct,
+    equityCurve,
+    hourlyStats: hours,
+    sessionStats: [
+      { session: 'sydney', ...sessionsMap.sydney },
+      { session: 'tokyo', ...sessionsMap.tokyo },
+      { session: 'london', ...sessionsMap.london },
+      { session: 'newyork', ...sessionsMap.newyork },
+    ],
+    weekdayStats: weekdays,
   };
 }

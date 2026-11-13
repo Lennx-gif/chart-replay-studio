@@ -25,6 +25,7 @@ import {
 import { toast } from 'sonner';
 import { FileUpload } from '@/components/FileUpload';
 import { CreateSessionModal } from '@/components/CreateSessionModal';
+import { ActivityMatrix } from '@/components/ActivityMatrix';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -412,6 +413,9 @@ export default function Home() {
           </div>
         </section>
 
+        {/* 52-Week GitHub-Style Backtest Activity Matrix */}
+        <ActivityMatrix sessions={sessions} />
+
         {/* Dashboard Tabbed Navigation */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 border-b border-border pb-2">
           <div className="flex items-center gap-1.5 p-1 rounded-xl bg-secondary/50 border border-border w-fit">
@@ -518,6 +522,11 @@ export default function Home() {
               <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
                 {filteredSessions.map((s) => {
                   const pct = s.totalBars > 1 ? ((s.position - 1) / (s.totalBars - 1)) * 100 : 0;
+                  const startingBal = s.startingBalance || DEFAULT_STARTING_BALANCE;
+                  const currentEquity = startingBal + (s.realizedPnl || 0);
+                  const returnPct = startingBal > 0 ? ((currentEquity - startingBal) / startingBal) * 100 : 0;
+                  const isGain = (s.realizedPnl || 0) >= 0;
+
                   return (
                     <div
                       key={s.id}
@@ -574,9 +583,29 @@ export default function Home() {
                           </div>
                         </div>
 
+                        {/* Account Equity & Net PnL Pill */}
+                        <div className="mt-2.5 p-2 rounded-lg bg-secondary/40 border border-border/60 flex items-center justify-between text-xs font-mono">
+                          <div>
+                            <span className="text-[9px] uppercase tracking-wider text-muted-foreground block">
+                              Current Equity
+                            </span>
+                            <span className={`font-bold ${isGain ? 'text-long' : 'text-short'}`}>
+                              ${currentEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[9px] uppercase tracking-wider text-muted-foreground block">
+                              Net Return
+                            </span>
+                            <span className={`text-[11px] font-semibold ${isGain ? 'text-long' : 'text-short'}`}>
+                              {isGain ? '+' : ''}${s.realizedPnl.toFixed(2)} ({returnPct >= 0 ? '+' : ''}{returnPct.toFixed(1)}%)
+                            </span>
+                          </div>
+                        </div>
+
                         {/* Date Range Badge */}
                         {s.startDate && s.endDate && (
-                          <div className="mt-2.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground bg-secondary/40 px-2 py-0.5 rounded border border-border/50 w-fit">
+                          <div className="mt-2 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground bg-secondary/40 px-2 py-0.5 rounded border border-border/50 w-fit">
                             <Calendar size={10} className="text-primary" />
                             <span>
                               {s.startDate} → {s.endDate}
@@ -585,7 +614,7 @@ export default function Home() {
                         )}
 
                         {/* Progress Bar */}
-                        <div className="mt-3.5 space-y-1">
+                        <div className="mt-3 space-y-1">
                           <div className="flex items-center justify-between text-[10px] font-mono text-muted-foreground">
                             <span>Replay Progress</span>
                             <span>{pct.toFixed(0)}%</span>
@@ -600,16 +629,11 @@ export default function Home() {
                       </div>
 
                       {/* Footer Metrics */}
-                      <div className="mt-4 pt-3 border-t border-border/60 flex items-center justify-between text-[11px] font-mono">
+                      <div className="mt-3.5 pt-2.5 border-t border-border/60 flex items-center justify-between text-[11px] font-mono">
                         <div className="text-muted-foreground">
                           {s.closedTrades} {s.closedTrades === 1 ? 'trade' : 'trades'}
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className={s.realizedPnl >= 0 ? 'text-long font-semibold' : 'text-short font-semibold'}>
-                            {s.closedTrades > 0
-                              ? `${s.realizedPnl >= 0 ? '+' : ''}$${s.realizedPnl.toFixed(2)}`
-                              : '$0.00'}
-                          </span>
                           <span className="flex items-center gap-1 text-primary text-xs font-semibold group-hover:translate-x-0.5 transition-transform">
                             <Play size={11} className="fill-current" /> Resume
                           </span>

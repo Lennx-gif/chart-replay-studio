@@ -5,6 +5,7 @@ import type { Bookmark, SessionRecord, StepUnit } from '@/lib/db';
 import {
   buildTimeframeIndex, clampPosition, formatBarTime, lowerBoundByTime, playbackTick, stepPosition, visibleCandles,
 } from '@/lib/replay';
+import { detectBaseTimeframe } from '@/lib/csvParser';
 import {
   createLimitOrder, createMarketOrder, processBar, rewindOrders, type Order, type OrderSide,
   getContractMultiplier, getPipSize,
@@ -71,6 +72,7 @@ export function useReplayEngine(raw: OHLCVBar[], session: SessionRecord) {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>(session.bookmarks);
   const [startPosition, setStartPosition] = useState(session.startPosition);
 
+  const baseTimeframe = useMemo(() => detectBaseTimeframe(raw), [raw]);
   const index = useMemo(() => buildTimeframeIndex(raw, timeframe), [raw, timeframe]);
   const candles = useMemo(() => visibleCandles(raw, index, position), [raw, index, position]);
 
@@ -114,11 +116,11 @@ export function useReplayEngine(raw: OHLCVBar[], session: SessionRecord) {
     if (halted || next >= total) setIsPlaying(false);
   }, [raw, total]);
 
-  /** Step `count` units (bars or candles per the step unit); negative goes back. */
+  /** Step `count` units (bars, sub-bars, or candles per the step unit); negative goes back. */
   const step = useCallback((count: number) => {
     const { position: p, index: idx, stepUnit: unit } = live.current;
-    moveTo(stepPosition(idx, p, total, unit, count), { stopAtEvents: count > 0 });
-  }, [moveTo, total]);
+    moveTo(stepPosition(idx, p, total, unit, count, baseTimeframe), { stopAtEvents: count > 0 });
+  }, [moveTo, total, baseTimeframe]);
 
   const seek = useCallback((target: number) => moveTo(target), [moveTo]);
 
@@ -147,10 +149,10 @@ export function useReplayEngine(raw: OHLCVBar[], session: SessionRecord) {
     const id = setInterval(() => {
       const { position: p, index: idx, stepUnit: unit } = live.current;
       if (p >= total) { setIsPlaying(false); return; }
-      moveTo(stepPosition(idx, p, total, unit, unitsPerTick), { stopAtEvents: true });
+      moveTo(stepPosition(idx, p, total, unit, unitsPerTick, baseTimeframe), { stopAtEvents: true });
     }, intervalMs);
     return () => clearInterval(id);
-  }, [isPlaying, speed, total, moveTo]);
+  }, [isPlaying, speed, total, moveTo, baseTimeframe]);
 
   // ---------------------------------------------------------------- trading
 
@@ -199,6 +201,14 @@ export function useReplayEngine(raw: OHLCVBar[], session: SessionRecord) {
     },
     []
   );
+
+  const setOrdersWrapper = useCallback((updater: React.SetStateAction<Order[]>) => {
+    setOrders((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      live.current = { ...live.current, orders: next };
+      return next;
+    });
+  }, []);
 
   const closeOrder = useCallback((orderId: string) => {
     const bar = raw[live.current.position - 1];
@@ -251,10 +261,10 @@ export function useReplayEngine(raw: OHLCVBar[], session: SessionRecord) {
   }, [bookmarks, moveTo]);
 
   return {
-    total, position, candles, index, orders, isPlaying, speed, stepUnit, timeframe, pauseOnTradeEvents, bookmarks, startPosition,
+    total, position, candles, index, orders, isPlaying, speed, stepUnit, timeframe, baseTimeframe, pauseOnTradeEvents, bookmarks, startPosition,
     setSpeed, setStepUnit, setTimeframe, setPauseOnTradeEvents, setStartPosition, setIsPlaying,
     moveTo, step, seek, seekToTime, restart, togglePlay,
-    placeMarket, placePending, closeOrder, closeAll, cancelOrder, updateOrder,
+    placeMarket, placePending, closeOrder, closeAll, cancelOrder, updateOrder, setOrders: setOrdersWrapper,
     addBookmark, removeBookmark, renameBookmark, jumpBookmark,
   };
 }

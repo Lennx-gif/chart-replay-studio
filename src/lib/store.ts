@@ -1,4 +1,5 @@
-import { db, type BarsRecord, type DatasetRecord, type SessionRecord, type StepUnit, type ChartStyle, type DateRangeMode } from './db';
+import { db, type BarsRecord, type DatasetRecord, type SessionRecord, type StepUnit, type ChartStyle, type DateRangeMode, type NewsEventRecord } from './db';
+import { SAMPLE_NEWS_EVENTS } from './sampleNews';
 import type { OHLCVBar } from './csvParser';
 import { detectBaseTimeframe } from './csvParser';
 import { DEFAULT_SPEED, DEFAULT_START_POSITION, clampPosition, lowerBoundByTime } from './replay';
@@ -370,3 +371,29 @@ export async function importBackup(json: unknown): Promise<ImportSummary> {
 
   return { datasets, sessions };
 }
+
+// ---------------------------------------------------------------- news
+
+export async function saveNewsEvents(events: NewsEventRecord[]): Promise<number> {
+  if (events.length === 0) return 0;
+  await db.newsEvents.bulkPut(events);
+  return events.length;
+}
+
+export async function listNewsEvents(): Promise<NewsEventRecord[]> {
+  try {
+    const count = await db.newsEvents.count();
+    if (count === 0) {
+      await db.newsEvents.bulkPut(SAMPLE_NEWS_EVENTS);
+      return SAMPLE_NEWS_EVENTS;
+    }
+    return db.newsEvents.orderBy('time').toArray();
+  } catch {
+    return SAMPLE_NEWS_EVENTS;
+  }
+}
+
+export async function clearNewsEvents(): Promise<void> {
+  await db.newsEvents.clear();
+}
+

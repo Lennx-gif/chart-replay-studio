@@ -35,7 +35,7 @@ export interface BarsRecord {
   };
 }
 
-export type StepUnit = 'bar' | 'candle';
+export type StepUnit = 'bar' | 'candle' | '1m' | '5m' | '15m';
 export type ChartStyle = 'candles' | 'line' | 'bars' | 'area';
 export type DateRangeMode = 'daily' | 'monthly' | 'yearly' | 'all';
 
@@ -93,11 +93,26 @@ export interface SettingRecord {
   value: unknown;
 }
 
+export type NewsImpact = 'high' | 'medium' | 'low';
+
+export interface NewsEventRecord {
+  id: string;
+  time: number; // unix seconds (UTC)
+  currency: string; // e.g. "USD", "EUR"
+  title: string;
+  impact: NewsImpact;
+  actual?: string;
+  forecast?: string;
+  previous?: string;
+  source?: string;
+}
+
 class ReplayDatabase extends Dexie {
   datasets!: Table<DatasetRecord, string>;
   bars!: Table<BarsRecord, string>;
   sessions!: Table<SessionRecord, string>;
   settings!: Table<SettingRecord, string>;
+  newsEvents!: Table<NewsEventRecord, string>;
 
   constructor(name = 'chart-replay-studio') {
     super(name);
@@ -106,6 +121,13 @@ class ReplayDatabase extends Dexie {
       bars: 'datasetId',
       sessions: 'id, datasetId, updatedAt, lastOpenedAt',
       settings: 'key',
+    });
+    this.version(2).stores({
+      datasets: 'id, &fingerprint, symbol, createdAt',
+      bars: 'datasetId',
+      sessions: 'id, datasetId, updatedAt, lastOpenedAt',
+      settings: 'key',
+      newsEvents: 'id, time, currency, impact',
     });
   }
 }

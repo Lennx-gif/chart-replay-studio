@@ -205,11 +205,12 @@ export function visibleCandles(raw: OHLCVBar[], index: TimeframeIndex, position:
   return out;
 }
 
-export type StepUnit = 'bar' | 'candle';
+export type StepUnit = 'bar' | 'candle' | '1m' | '5m' | '15m';
 
 /**
  * Position after stepping `count` units forward (negative = backward).
- *  - 'bar'    moves by base bars
+ *  - 'bar'    moves by base data bars
+ *  - '1m'/'5m'/'15m' moves by synthesized or real sub-timeframe bar intervals
  *  - 'candle' moves to the close of the Nth next candle on the current
  *             timeframe (or back to the close of the Nth previous candle)
  */
@@ -219,8 +220,16 @@ export function stepPosition(
   total: number,
   unit: StepUnit,
   count: number,
+  baseTimeframe = 1,
 ): number {
   if (total === 0) return 0;
+
+  if (unit === '1m' || unit === '5m' || unit === '15m') {
+    const subMin = parseInt(unit, 10);
+    const barsPerSub = Math.max(1, Math.round(subMin / Math.max(1, baseTimeframe)));
+    return clampPosition(position + count * barsPerSub, total);
+  }
+
   if (unit === 'bar' || index.minutes <= 0) {
     return clampPosition(position + count, total);
   }
@@ -274,7 +283,7 @@ export function playbackTick(speed: number): { intervalMs: number; unitsPerTick:
   return { intervalMs: MIN_INTERVAL, unitsPerTick: Math.max(1, Math.round((perSecond * MIN_INTERVAL) / 1000)) };
 }
 
-export const SPEEDS = [0.25, 0.5, 1, 2, 3, 5, 10, 20, 50, 100];
+export const SPEEDS = [0.25, 0.5, 1, 2, 3, 5, 10, 20, 50, 100, 250, 500, 1000];
 export const DEFAULT_SPEED = 2;
 export const DEFAULT_START_POSITION = 50;
 

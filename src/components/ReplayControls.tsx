@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Play,
   Pause,
@@ -14,6 +14,7 @@ import {
   Undo2,
   Minimize2,
   Maximize2,
+  ChevronDown,
 } from 'lucide-react';
 import type { StepUnit } from '@/lib/db';
 import { SPEEDS, formatBarTime } from '@/lib/replay';
@@ -31,6 +32,8 @@ interface ReplayControlsProps {
   onPauseOnTradeEventsChange: (on: boolean) => void;
   position: number;
   total: number;
+  timeframe?: number;
+  baseTimeframe?: number;
   /** Time of the newest revealed bar (display timezone already applied by the caller). */
   currentTime?: number;
   tzOffset: number;
@@ -56,6 +59,8 @@ export function ReplayControls({
   onPauseOnTradeEventsChange,
   position,
   total,
+  timeframe = 60,
+  baseTimeframe = 1,
   currentTime,
   tzOffset,
   onSeek,
@@ -65,6 +70,36 @@ export function ReplayControls({
 }: ReplayControlsProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [showOpacitySlider, setShowOpacitySlider] = useState(false);
+  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const speedMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (speedMenuRef.current && !speedMenuRef.current.contains(e.target as Node)) {
+        setShowSpeedMenu(false);
+      }
+    };
+    if (showSpeedMenu) {
+      window.addEventListener('mousedown', handleClickOutside);
+      return () => window.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showSpeedMenu]);
+
+  const availableStepUnits = useMemo<StepUnit[]>(() => {
+    const chartTf = timeframe ?? 60;
+    const baseTf = baseTimeframe ?? 1;
+
+    const units: StepUnit[] = [];
+    if (baseTf <= 1 && chartTf >= 5) {
+      units.push('1m');
+    }
+    if (baseTf <= 5 && chartTf >= 15) {
+      units.push('5m');
+    }
+    units.push('bar');
+    units.push('candle');
+    return units;
+  }, [timeframe, baseTimeframe]);
 
   // Position state (null = center bottom)
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(() => {
@@ -296,36 +331,65 @@ export function ReplayControls({
 
         <div className="w-px h-4 bg-border mx-0.5" />
 
-        {/* Step Unit Toggle */}
+        {/* Step / Tick Resolution Selector */}
         <div className="flex items-center gap-0.5 bg-secondary/80 rounded-full p-0.5 border border-border">
-          {(['bar', 'candle'] as StepUnit[]).map((u) => (
+          {availableStepUnits.map((u) => (
             <button
               key={u}
               onClick={() => onStepUnitChange(u)}
-              className={`px-2 py-0.5 text-[10px] font-mono uppercase rounded-full transition-all ${
-                stepUnit === u ? 'bg-primary text-primary-foreground font-semibold shadow-sm' : 'text-muted-foreground hover:text-foreground'
+              className={`px-2 py-0.5 text-[10px] font-mono uppercase rounded-full transition-all cursor-pointer ${
+                stepUnit === u
+                  ? 'bg-primary text-primary-foreground font-semibold shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
               }`}
-              title={u === 'bar' ? 'Step by base data bar' : 'Step by chart timeframe candle'}
+              title={
+                u === 'bar'
+                  ? 'Step by base data bar'
+                  : u === 'candle'
+                  ? 'Step by chart timeframe candle'
+                  : `Intra-bar streaming step: ${u}`
+              }
             >
               {u}
             </button>
           ))}
         </div>
 
-        {/* Speed Selector */}
-        <div className="flex items-center gap-1">
-          <select
-            value={speed}
-            onChange={(e) => onSpeedChange(Number(e.target.value))}
-            className="bg-secondary text-secondary-foreground border border-border rounded-full px-2 py-0.5 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-            title="Playback Speed"
+        {/* Custom Styled Playback Speed Menu */}
+        <div className="relative flex items-center" ref={speedMenuRef}>
+          <button
+            onClick={() => setShowSpeedMenu((p) => !p)}
+            className="flex items-center gap-1 bg-[#141413] hover:bg-[#1f1e1a] text-amber-400 border border-[#2a2926] rounded-full px-2.5 py-0.5 text-[11px] font-mono transition-all shadow-sm active:scale-95 cursor-pointer"
+            title="Select Playback Speed"
           >
-            {SPEEDS.map((s) => (
-              <option key={s} value={s}>
-                {s}x
-              </option>
-            ))}
-          </select>
+            <span className="font-semibold">{speed}x</span>
+            <ChevronDown size={11} className={`transition-transform duration-150 text-amber-400/80 ${showSpeedMenu ? 'rotate-180' : ''}`} />
+          </button>
+
+          {showSpeedMenu && (
+            <div className="absolute bottom-9 left-1/2 -translate-x-1/2 bg-[#141413]/95 backdrop-blur-md border border-[#2a2926] rounded-xl shadow-2xl p-2 grid grid-cols-4 gap-1 z-50 min-w-[210px] animate-in fade-in zoom-in-95 duration-100 select-none">
+              <div className="col-span-4 px-1 pb-1 text-[9px] font-mono uppercase tracking-wider text-muted-foreground border-b border-[#2a2926] mb-1 flex items-center justify-between">
+                <span>Playback Speed</span>
+                <span className="text-amber-500 font-bold">{speed}x</span>
+              </div>
+              {SPEEDS.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => {
+                    onSpeedChange(s);
+                    setShowSpeedMenu(false);
+                  }}
+                  className={`px-1.5 py-1 text-[11px] font-mono rounded-lg transition-all text-center cursor-pointer ${
+                    speed === s
+                      ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-black font-bold shadow-md shadow-amber-500/30'
+                      : 'text-zinc-300 hover:text-white hover:bg-white/10'
+                  }`}
+                >
+                  {s}x
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="w-px h-4 bg-border mx-0.5" />
