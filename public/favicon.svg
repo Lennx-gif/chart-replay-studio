@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
   <!-- Solid Dark Base Shield for High Contrast across Dark and Light Browser Tabs -->
   <rect x="3" y="3" width="58" height="58" rx="14" fill="#14120e" stroke="#2a241b" stroke-width="2"/>
   <rect x="5" y="5" width="54" height="54" rx="12" stroke="#f59e0b" stroke-opacity="0.3" stroke-width="1"/>
