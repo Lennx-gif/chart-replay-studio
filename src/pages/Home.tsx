@@ -26,6 +26,8 @@ import { toast } from 'sonner';
 import { FileUpload } from '@/components/FileUpload';
 import { CreateSessionModal } from '@/components/CreateSessionModal';
 import { ActivityMatrix } from '@/components/ActivityMatrix';
+import { AppLogo } from '@/components/AppLogo';
+import { DashboardAnalytics } from '@/components/DashboardAnalytics';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -59,7 +61,7 @@ import {
 } from '@/lib/store';
 
 type Pending = { kind: 'session'; item: SessionRecord } | { kind: 'dataset'; item: DatasetRecord } | null;
-type DashboardTab = 'sessions' | 'datasets' | 'telemetry';
+type DashboardTab = 'sessions' | 'datasets' | 'analytics' | 'telemetry';
 
 const fmtDate = (unix: number) => new Date(unix * 1000).toISOString().slice(0, 10);
 const fmtBytes = (n: number) =>
@@ -272,9 +274,7 @@ export default function Home() {
         {/* Top Header */}
         <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-border">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-amber-600 flex items-center justify-center shadow-lg shadow-primary/20 text-primary-foreground font-black text-lg">
-              CR
-            </div>
+            <AppLogo size={40} className="w-10 h-10" />
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">
@@ -334,7 +334,11 @@ export default function Home() {
 
         {/* Hero Telemetry Metric Tiles */}
         <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          <div className="panel p-3.5 space-y-1">
+          <div
+            className="panel p-3.5 space-y-1 cursor-pointer hover:border-primary/50 transition-colors"
+            onClick={() => setActiveTab('sessions')}
+            title="View all Sessions"
+          >
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold flex items-center justify-between">
               <span>Sessions</span>
               <Layers size={12} className="text-primary" />
@@ -343,7 +347,11 @@ export default function Home() {
             <div className="text-[10px] text-muted-foreground truncate">Backtest replays</div>
           </div>
 
-          <div className="panel p-3.5 space-y-1">
+          <div
+            className="panel p-3.5 space-y-1 cursor-pointer hover:border-primary/50 transition-colors"
+            onClick={() => setActiveTab('datasets')}
+            title="View Datasets & Data Times"
+          >
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold flex items-center justify-between">
               <span>Datasets</span>
               <Database size={12} className="text-primary" />
@@ -354,7 +362,11 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="panel p-3.5 space-y-1">
+          <div
+            className="panel p-3.5 space-y-1 cursor-pointer hover:border-primary/50 transition-colors"
+            onClick={() => setActiveTab('analytics')}
+            title="Open Detailed Analytics"
+          >
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold flex items-center justify-between">
               <span>Total Trades</span>
               <BarChart3 size={12} className="text-primary" />
@@ -365,7 +377,11 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="panel p-3.5 space-y-1">
+          <div
+            className="panel p-3.5 space-y-1 cursor-pointer hover:border-primary/50 transition-colors"
+            onClick={() => setActiveTab('analytics')}
+            title="Open Detailed Analytics"
+          >
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold flex items-center justify-between">
               <span>Win Rate</span>
               <Percent size={12} className="text-primary" />
@@ -380,7 +396,11 @@ export default function Home() {
             <div className="text-[10px] text-muted-foreground truncate">Across all sessions</div>
           </div>
 
-          <div className="panel p-3.5 space-y-1">
+          <div
+            className="panel p-3.5 space-y-1 cursor-pointer hover:border-primary/50 transition-colors"
+            onClick={() => setActiveTab('analytics')}
+            title="Open Detailed Analytics"
+          >
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold flex items-center justify-between">
               <span>Realized P&L</span>
               <TrendingUp size={12} className="text-primary" />
@@ -397,7 +417,11 @@ export default function Home() {
             <div className="text-[10px] text-muted-foreground truncate">Cumulative return</div>
           </div>
 
-          <div className="panel p-3.5 space-y-1">
+          <div
+            className="panel p-3.5 space-y-1 cursor-pointer hover:border-primary/50 transition-colors"
+            onClick={() => setActiveTab('analytics')}
+            title="Open Detailed Analytics"
+          >
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold flex items-center justify-between">
               <span>Profit Factor</span>
               <ShieldCheck size={12} className="text-primary" />
@@ -450,6 +474,23 @@ export default function Home() {
             </button>
 
             <button
+              onClick={() => setActiveTab('analytics')}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'analytics'
+                  ? 'bg-primary text-primary-foreground shadow-sm shadow-primary/20'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <BarChart3 size={13} />
+              <span>Analytics</span>
+              {aggregateTelemetry.totalTrades > 0 && (
+                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-black/20">
+                  {aggregateTelemetry.totalTrades}
+                </span>
+              )}
+            </button>
+
+            <button
               onClick={() => setActiveTab('telemetry')}
               className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === 'telemetry'
@@ -457,8 +498,8 @@ export default function Home() {
                   : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              <BarChart3 size={13} />
-              <span>Telemetry & Journal</span>
+              <BookOpen size={13} />
+              <span>Journal & Notes</span>
             </button>
           </div>
 
@@ -784,7 +825,16 @@ export default function Home() {
           </section>
         )}
 
-        {/* Tab 3: Telemetry & Journal */}
+        {/* Tab 3: Dedicated Analytics Suite */}
+        {activeTab === 'analytics' && (
+          <DashboardAnalytics
+            sessions={sessions}
+            defaultStartingBalance={balance}
+            onOpenSession={(id) => navigate(`/session/${id}`)}
+          />
+        )}
+
+        {/* Tab 4: Telemetry & Journal */}
         {activeTab === 'telemetry' && (
           <section className="space-y-6">
             {/* Global Journal & Performance Stats */}

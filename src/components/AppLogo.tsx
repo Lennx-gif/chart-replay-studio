@@ -1,0 +1,112 @@
+interface AppLogoProps {
+  size?: number;
+  className?: string;
+}
+
+/**
+ * Chart Replay Studio official emblem:
+ * High-contrast dark shield with candlestick price action,
+ * golden-amber replay loop and playback indicator.
+ * No blur or glow effects — crisp, sharp vector geometry.
+ */
+export function AppLogo({ size = 40, className = '' }: AppLogoProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 64 64"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={`shrink-0 select-none ${className}`}
+      aria-label="Chart Replay Studio Logo"
+    >
+      {/* Base Shield: Obsidian background with amber-accented border */}
+      <rect
+        x="3"
+        y="3"
+        width="58"
+        height="58"
+        rx="14"
+        fill="#14120e"
+        stroke="#2a241b"
+        strokeWidth="2"
+      />
+      <rect
+        x="5"
+        y="5"
+        width="54"
+        height="54"
+        rx="12"
+        stroke="#f59e0b"
+        strokeOpacity="0.3"
+        strokeWidth="1"
+      />
+
+      {/* Bearish Candlestick (Rose/Coral) */}
+      <line
+        x1="21"
+        y1="18"
+        x2="21"
+        y2="44"
+        stroke="#f43f5e"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+      <rect
+        x="18"
+        y="24"
+        width="6"
+        height="14"
+        rx="1.5"
+        fill="#f43f5e"
+      />
+
+      {/* Bullish Candlestick (Emerald) */}
+      <line
+        x1="33"
+        y1="14"
+        x2="33"
+        y2="46"
+        stroke="#10b981"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+      <rect
+        x="30"
+        y="19"
+        width="6"
+        height="18"
+        rx="1.5"
+        fill="#10b981"
+      />
+
+      {/* Golden-Amber Replay Loop Arc */}
+      <path
+        d="M 23 13 A 22 22 0 1 1 11 36"
+        stroke="#f59e0b"
+        strokeWidth="3"
+        strokeLinecap="round"
+        fill="none"
+      />
+      {/* Forward Replay Arrowhead */}
+      <polygon
+        points="26,8 26,18 35,13"
+        fill="#f59e0b"
+      />
+
+      {/* Playback Badge */}
+      <circle
+        cx="46"
+        cy="46"
+        r="9"
+        fill="#201a14"
+        stroke="#f59e0b"
+        strokeWidth="1.5"
+      />
+      <polygon
+        points="44,41.5 44,50.5 50.5,46"
+        fill="#f59e0b"
+      />
+    </svg>
+  );
+}
