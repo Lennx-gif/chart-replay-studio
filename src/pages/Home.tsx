@@ -28,6 +28,7 @@ import { CreateSessionModal } from '@/components/CreateSessionModal';
 import { ActivityMatrix } from '@/components/ActivityMatrix';
 import { AppLogo } from '@/components/AppLogo';
 import { DashboardAnalytics } from '@/components/DashboardAnalytics';
+import { JournalCalendar } from '@/components/JournalCalendar';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -837,7 +838,13 @@ export default function Home() {
         {/* Tab 4: Telemetry & Journal */}
         {activeTab === 'telemetry' && (
           <section className="space-y-6">
-            {/* Global Journal & Performance Stats */}
+            {/* 1. Historical Trading P&L & Journal Calendar */}
+            <JournalCalendar
+              sessions={sessions}
+              onOpenSession={(id) => navigate(`/session/${id}`)}
+            />
+
+            {/* 2. Global Performance Telemetry Summary */}
             <div className="panel p-5 space-y-4">
               <div className="flex items-center justify-between border-b border-border pb-3">
                 <div className="flex items-center gap-2">

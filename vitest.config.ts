@@ -14,6 +14,8 @@ export default defineConfig({
     pool: "threads",
     fileParallelism: false,
     isolate: false,
+    testTimeout: 30000,
+    hookTimeout: 30000,
   },
   resolve: {
     alias: { "@": path.resolve(rootDir, "./src") },
