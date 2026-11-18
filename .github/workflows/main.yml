@@ -1,15 +1,18 @@
+
 name: "Desktop Release"
 
 on:
   push:
     tags:
       - 'v*'
+
   workflow_dispatch:
     inputs:
       release_tag:
         description: 'Release Tag (e.g. v0.1.0)'
         required: false
         default: 'v0.1.0'
+        type: string
 
 permissions:
   contents: write
@@ -18,55 +21,94 @@ jobs:
   release:
     permissions:
       contents: write
+
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest'
+          - platform: macos-latest
             args: '--target aarch64-apple-darwin'
-          - platform: 'macos-latest'
+
+          - platform: macos-latest
             args: '--target x86_64-apple-darwin'
-          - platform: 'ubuntu-22.04'
+
+          - platform: ubuntu-22.04
             args: ''
-          - platform: 'windows-latest'
+
+          - platform: windows-latest
             args: ''
 
     runs-on: ${{ matrix.platform }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: npm
 
+      # FIX: Install Bun on all platforms
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Verify Bun installation
+        run: bun --version
+
+      # Rust
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      - name: Install Linux system dependencies (Ubuntu)
+      # Linux dependencies
+      - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev build-essential curl wget file
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            build-essential \
+            curl \
+            wget \
+            file
 
+      # Frontend dependencies
       - name: Install frontend dependencies
         run: npm install --legacy-peer-deps
 
+      # Production frontend build
       - name: Build frontend production bundle
         run: npm run build
 
+      # Tauri desktop release
       - name: Build and Publish Tauri Desktop App
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
         with:
-          tagName: ${{ github.ref_name || inputs.release_tag }}
-          releaseName: 'Chart Replay Studio ${{ github.ref_name || inputs.release_tag }}'
-          releaseBody: 'Chart Replay Studio native desktop release with local-first IndexedDB persistence, TradingView chart tools, and historical Wayback calendar.'
+          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+
+          releaseName: 'Chart Replay Studio ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}'
+
+          releaseBody: |
+            Chart Replay Studio native desktop release.
+
+            Features:
+            - Local-first IndexedDB persistence
+            - TradingView chart tools
+            - Historical Wayback calendar
+
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
