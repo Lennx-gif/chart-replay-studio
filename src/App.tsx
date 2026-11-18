@@ -3,10 +3,12 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, HashRouter, Routes, Route } from "react-router-dom";
 import { ParticleBackground } from "@/components/ParticleBackground";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { RouteLoadingFallback } from "@/components/RouteLoadingFallback";
+import { isDesktopApp } from "@/services/nativeDialogs";
+import { useDesktopImmersion } from "@/hooks/useDesktopImmersion";
 
 const Home = lazy(() => import("./pages/Home"));
 const SessionPage = lazy(() => import("./pages/SessionPage"));
@@ -22,25 +24,40 @@ const queryClient = new QueryClient({
   },
 });
 
-const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <Toaster />
-      <Sonner />
-      <BrowserRouter>
-        <ParticleBackground />
-        <ErrorBoundary>
-          <Suspense fallback={<RouteLoadingFallback />}>
-            <Routes>
-              <Route path="/" element={<Home />} />
-              <Route path="/session/:id" element={<SessionPage />} />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </Suspense>
-        </ErrorBoundary>
-      </BrowserRouter>
-    </TooltipProvider>
-  </QueryClientProvider>
-);
+function AppContent() {
+  useDesktopImmersion();
+
+  return (
+    <>
+      <ParticleBackground />
+      <ErrorBoundary>
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/session/:id" element={<SessionPage />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </Suspense>
+      </ErrorBoundary>
+    </>
+  );
+}
+
+const App = () => {
+  const isDesktop = isDesktopApp();
+  const RouterComponent = isDesktop ? HashRouter : BrowserRouter;
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <Toaster />
+        <Sonner />
+        <RouterComponent>
+          <AppContent />
+        </RouterComponent>
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+};
 
 export default App;

@@ -1,5 +1,6 @@
 import { Upload, FileSpreadsheet } from 'lucide-react';
 import { useCallback, useRef, useState } from 'react';
+import { isDesktopApp, pickCsvFile } from '@/services/nativeDialogs';
 
 interface FileUploadProps {
   onFileSelected: (file: File) => void;
@@ -18,6 +19,19 @@ export function FileUpload({ onFileSelected, isLoading }: FileUploadProps) {
     if (file && file.name.toLowerCase().endsWith('.csv')) onFileSelected(file);
   }, [onFileSelected]);
 
+  const handleBrowseClick = useCallback(async () => {
+    if (isLoading) return;
+    if (isDesktopApp()) {
+      const file = await pickCsvFile();
+      if (file) {
+        onFileSelected(file);
+        return;
+      }
+    } else {
+      inputRef.current?.click();
+    }
+  }, [isLoading, onFileSelected]);
+
   return (
     <div
       className={`panel p-8 text-center cursor-pointer transition-all duration-200 ${
@@ -26,10 +40,10 @@ export function FileUpload({ onFileSelected, isLoading }: FileUploadProps) {
       onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
-      onClick={() => !isLoading && inputRef.current?.click()}
+      onClick={handleBrowseClick}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') inputRef.current?.click(); }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') void handleBrowseClick(); }}
     >
       <input
         ref={inputRef}

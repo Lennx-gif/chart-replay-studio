@@ -8,9 +8,12 @@ export default defineConfig(({ mode }) => {
   const rootDir = import.meta.dirname || process.cwd();
 
   return {
+    clearScreen: false,
+    envPrefix: ["VITE_", "TAURI_"],
     server: {
       host: "::",
       port: 8080,
+      strictPort: true,
       hmr: {
         overlay: false,
       },

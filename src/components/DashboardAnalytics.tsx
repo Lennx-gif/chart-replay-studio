@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import type { SessionRecord } from '@/lib/db';
 import { calculateSessionAnalytics, type Order } from '@/lib/tradeEngine';
+import { exportCsvFile } from '@/services/nativeDialogs';
 
 interface EnrichedTrade extends Order {
   sessionId: string;
@@ -273,7 +274,7 @@ export function DashboardAnalytics({
     customEndDate !== '';
 
   // Export filtered trades to CSV
-  const handleExportCSV = () => {
+  const handleExportCSV = async () => {
     if (filteredTrades.length === 0) return;
     const headers = [
       'Trade Index',
@@ -308,13 +309,8 @@ export function DashboardAnalytics({
     ]);
 
     const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `chart-replay-analytics-${new Date().toISOString().slice(0, 10)}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+    const filename = `chart-replay-analytics-${new Date().toISOString().slice(0, 10)}.csv`;
+    await exportCsvFile(filename, csvContent);
   };
 
   // Sorted trades for execution log

@@ -19,6 +19,7 @@ import { listNewsEvents, saveNewsEvents, clearNewsEvents } from '@/lib/store';
 import { parseNewsCSV, getReplayEventStatus } from '@/lib/newsParser';
 import { SAMPLE_NEWS_EVENTS } from '@/lib/sampleNews';
 import { WaybackCalendar, type WaybackDayIndicator, formatYmd } from './WaybackCalendar';
+import { isDesktopApp, pickCsvFile } from '@/services/nativeDialogs';
 
 interface NewsFeedProps {
   currentReplayTime?: number;
@@ -190,6 +191,17 @@ export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTim
 
   const isSyncedToReplay = selectedDate === currentReplayYmd;
 
+  const handleUploadClick = async () => {
+    if (isDesktopApp()) {
+      const file = await pickCsvFile();
+      if (file) {
+        await handleFileUpload(file);
+      }
+    } else {
+      fileInputRef.current?.click();
+    }
+  };
+
   return (
     <div className="flex flex-col h-full overflow-hidden select-none text-xs">
       {/* 1. Header & Controls */}
@@ -213,7 +225,7 @@ export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTim
               {showCalendar ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
             </button>
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={handleUploadClick}
               className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
               title="Import CSV Calendar"
             >

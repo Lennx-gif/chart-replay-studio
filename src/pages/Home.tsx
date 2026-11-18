@@ -43,6 +43,7 @@ import { parseCSV } from '@/lib/csvParser';
 import type { DatasetRecord, SessionRecord } from '@/lib/db';
 import { formatTimeframe } from '@/lib/replay';
 import { installSampleDataset } from '@/lib/sampleData';
+import { exportJsonFile, pickAndReadJsonFile, isDesktopApp } from '@/services/nativeDialogs';
 import { calculateStats, type Order } from '@/lib/tradeEngine';
 import {
   DEFAULT_STARTING_BALANCE,
@@ -241,15 +242,29 @@ export default function Home() {
   const handleExport = async () => {
     try {
       const backup = await exportBackup();
-      const blob = new Blob([JSON.stringify(backup)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `chart-replay-backup-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+      const filename = `chart-replay-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      const ok = await exportJsonFile(filename, backup);
+      if (ok) {
+        toast.success('Backup exported successfully');
+      }
     } catch {
       toast.error('Backup failed');
+    }
+  };
+
+  const handleRestoreClick = async () => {
+    if (isDesktopApp()) {
+      try {
+        const fileData = await pickAndReadJsonFile();
+        if (!fileData) return;
+        const summary = await importBackup(JSON.parse(fileData.content));
+        toast.success(`Restored ${summary.sessions} session(s) and ${summary.datasets} dataset(s)`);
+        await refresh();
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : 'Could not read backup');
+      }
+    } else {
+      backupInput.current?.click();
     }
   };
 
@@ -313,7 +328,7 @@ export default function Home() {
               </button>
               <button
                 className="toolbar-btn text-xs gap-1.5"
-                onClick={() => backupInput.current?.click()}
+                onClick={handleRestoreClick}
                 title="Restore sessions and data from JSON backup"
               >
                 <Upload size={13} /> Restore
