@@ -113,22 +113,17 @@ export function ChartToolbar({
     : 'cursor';
 
   return (
-    <div className="absolute left-0 top-0 bottom-0 z-30 flex select-none" style={{ pointerEvents: 'none' }}>
-      {/* Main vertical sidebar */}
-      <div
-        ref={flyoutRef}
-        className="flex flex-col justify-between bg-card/95 backdrop-blur-md border-r border-border w-11 py-2 relative shadow-md"
-        style={{ pointerEvents: 'auto' }}
-      >
-        {/* Top: Tool Groups */}
-        <div className="flex flex-col gap-0.5 items-center">
-          {CATEGORIES.map((cat) => {
-            const isActive = activeCategory === cat;
-            const isFlyoutOpen = flyoutCategory === cat;
-            const categoryTools = ALL_TOOLS.filter((t) => t.category === cat);
-
-            return (
-              <div key={cat} className="relative group w-full flex justify-center">
+    <div className="absolute left-0 top-0 bottom-0 z-30 flex" style={{ pointerEvents: 'none' }}>
+      {/* Vertical icon bar */}
+      <div className="flex flex-col bg-card/95 backdrop-blur-sm border-r border-border w-10 py-1 gap-0.5" style={{ pointerEvents: 'auto' }}>
+        {/* Favorites at top */}
+        {favorites.length > 0 && (
+          <>
+            {favorites.map(fav => {
+              const key = String(fav);
+              const tool = ALL_TOOLS.find(t => t.type === fav);
+              const tooltip = tool ? `${tool.label}${tool.shortcut ? ` (${tool.shortcut})` : ''}` : 'Cursor (Esc)';
+              return (
                 <button
                   onClick={() => handleCategoryClick(cat)}
                   className={`w-9 h-8 flex items-center justify-center rounded transition-colors relative ${
@@ -136,12 +131,11 @@ export function ChartToolbar({
                       ? 'text-primary bg-primary/15'
                       : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
                   }`}
-                  title={CATEGORY_LABELS[cat]}
+                  onClick={() => handleToolSelect(fav)}
+                  title={tooltip}
                 >
-                  {CATEGORY_ICONS[cat]}
-                  {cat !== 'cursor' && (
-                    <ChevronRight size={8} className="absolute right-0.5 bottom-0.5 text-muted-foreground/60" />
-                  )}
+                  {TOOL_ICONS[key] || <Star size={14} />}
+                  <Star size={6} className="absolute top-0.5 right-0.5 text-primary fill-primary" />
                 </button>
 
                 {/* Submenu Flyout */}

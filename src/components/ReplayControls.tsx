@@ -1,83 +1,108 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Play,
   Pause,
   SkipForward,
   SkipBack,
   RotateCcw,
-  Clock,
-  Gauge,
-  Minimize2,
-  Maximize2,
+  ChevronsRight,
+  ChevronsLeft,
+  Flag,
+  ShieldAlert,
   GripVertical,
   SlidersHorizontal,
   Undo2,
+  Minimize2,
+  Maximize2,
+  ChevronDown,
 } from 'lucide-react';
-
-export type StepMode = 'bar' | 'time';
+import type { StepUnit } from '@/lib/db';
+import { SPEEDS, formatBarTime } from '@/lib/replay';
 
 interface ReplayControlsProps {
   isPlaying: boolean;
   onPlayPause: () => void;
-  onStepForward: () => void;
-  onStepBack: () => void;
-  onReset: () => void;
-  // Speed interval in ms or multiplier
-  intervalMs: number;
-  onIntervalChange: (ms: number) => void;
-  // Step alignment
-  stepMode: StepMode;
-  onStepModeChange: (mode: StepMode) => void;
-  stepMinutes: number;
-  onStepMinutesChange: (minutes: number) => void;
-  // Progress
-  currentBar: number;
-  totalBars: number;
-  currentTime?: number; // unix seconds
-  onSeek: (bar: number) => void;
+  onStep: (count: number) => void;
+  onRestart: () => void;
+  speed: number;
+  onSpeedChange: (speed: number) => void;
+  stepUnit: StepUnit;
+  onStepUnitChange: (unit: StepUnit) => void;
+  pauseOnTradeEvents: boolean;
+  onPauseOnTradeEventsChange: (on: boolean) => void;
+  position: number;
+  total: number;
+  timeframe?: number;
+  baseTimeframe?: number;
+  /** Time of the newest revealed bar (display timezone already applied by the caller). */
+  currentTime?: number;
+  tzOffset: number;
+  onSeek: (position: number) => void;
+  onSetStart: () => void;
+  startPosition: number;
+  /** Bookmark UI slot (rendered at the right of the bar). */
+  bookmarks?: React.ReactNode;
 }
 
-const SPEED_PRESETS = [
-  { ms: 1500, label: '0.5x' },
-  { ms: 800, label: '1x' },
-  { ms: 400, label: '2x' },
-  { ms: 200, label: '4x' },
-  { ms: 100, label: '8x' },
-  { ms: 50, label: 'Turbo' },
-];
-
-const STEP_TIMEFRAMES = [
-  { minutes: 1, label: '1m' },
-  { minutes: 5, label: '5m' },
-  { minutes: 15, label: '15m' },
-  { minutes: 30, label: '30m' },
-  { minutes: 60, label: '1H' },
-  { minutes: 240, label: '4H' },
-  { minutes: 1440, label: '1D' },
-];
+const STEP_BIG = 10;
 
 export function ReplayControls({
   isPlaying,
   onPlayPause,
-  onStepForward,
-  onStepBack,
-  onReset,
-  intervalMs,
-  onIntervalChange,
-  stepMode,
-  onStepModeChange,
-  stepMinutes,
-  onStepMinutesChange,
-  currentBar,
-  totalBars,
+  onStep,
+  onRestart,
+  speed,
+  onSpeedChange,
+  stepUnit,
+  onStepUnitChange,
+  pauseOnTradeEvents,
+  onPauseOnTradeEventsChange,
+  position,
+  total,
+  timeframe = 60,
+  baseTimeframe = 1,
   currentTime,
+  tzOffset,
   onSeek,
+  onSetStart,
+  startPosition,
+  bookmarks,
 }: ReplayControlsProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [showOpacitySlider, setShowOpacitySlider] = useState(false);
+  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const speedMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (speedMenuRef.current && !speedMenuRef.current.contains(e.target as Node)) {
+        setShowSpeedMenu(false);
+      }
+    };
+    if (showSpeedMenu) {
+      window.addEventListener('mousedown', handleClickOutside);
+      return () => window.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showSpeedMenu]);
+
+  const availableStepUnits = useMemo<StepUnit[]>(() => {
+    const chartTf = timeframe ?? 60;
+    const baseTf = baseTimeframe ?? 1;
+
+    const units: StepUnit[] = [];
+    if (baseTf <= 1 && chartTf >= 5) {
+      units.push('1m');
+    }
+    if (baseTf <= 5 && chartTf >= 15) {
+      units.push('5m');
+    }
+    units.push('bar');
+    units.push('candle');
+    return units;
+  }, [timeframe, baseTimeframe]);
 
   // Position state (null = center bottom)
-  const [position, setPosition] = useState<{ x: number; y: number } | null>(() => {
+  const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(() => {
     try {
       const saved = localStorage.getItem('replay_controls_pos');
       return saved ? JSON.parse(saved) : null;
@@ -90,9 +115,9 @@ export function ReplayControls({
   const [opacity, setOpacity] = useState<number>(() => {
     try {
       const saved = localStorage.getItem('replay_controls_opacity');
-      return saved ? Number(saved) : 92;
+      return saved ? Number(saved) : 95;
     } catch {
-      return 92;
+      return 95;
     }
   });
 
@@ -102,25 +127,23 @@ export function ReplayControls({
   const handleDragStart = (e: React.MouseEvent) => {
     e.preventDefault();
     isDragging.current = true;
-    const currentX = position ? position.x : (window.innerWidth / 2 - 280);
-    const currentY = position ? position.y : (window.innerHeight - 70);
+    const currentX = dragPos ? dragPos.x : window.innerWidth / 2 - 320;
+    const currentY = dragPos ? dragPos.y : window.innerHeight - 70;
     dragStartRef.current = { x: e.clientX - currentX, y: e.clientY - currentY };
 
     const handleMouseMove = (ev: MouseEvent) => {
       if (!isDragging.current) return;
       const nextX = Math.max(10, Math.min(window.innerWidth - 180, ev.clientX - dragStartRef.current.x));
       const nextY = Math.max(10, Math.min(window.innerHeight - 50, ev.clientY - dragStartRef.current.y));
-      setPosition({ x: nextX, y: nextY });
+      setDragPos({ x: nextX, y: nextY });
     };
 
     const handleMouseUp = () => {
       isDragging.current = false;
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
-      setPosition((curr) => {
-        if (curr) {
-          localStorage.setItem('replay_controls_pos', JSON.stringify(curr));
-        }
+      setDragPos((curr) => {
+        if (curr) localStorage.setItem('replay_controls_pos', JSON.stringify(curr));
         return curr;
       });
     };
@@ -136,29 +159,28 @@ export function ReplayControls({
 
   const handleResetPosition = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setPosition(null);
+    setDragPos(null);
     localStorage.removeItem('replay_controls_pos');
   };
 
-  const formattedTime = currentTime
-    ? new Date(currentTime * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
-    : '';
+  const unitLabel = stepUnit === 'bar' ? 'bar' : 'candle';
+  const pct = total > 1 ? ((position - 1) / (total - 1)) * 100 : 0;
+  const timeFormatted = currentTime != null ? formatBarTime(currentTime, tzOffset) : '';
 
   const containerStyle: React.CSSProperties = {
     opacity: opacity / 100,
-    ...(position ? { left: `${position.x}px`, top: `${position.y}px` } : {}),
+    ...(dragPos ? { left: `${dragPos.x}px`, top: `${dragPos.y}px` } : {}),
   };
 
-  const containerClasses = position
+  const containerClasses = dragPos
     ? 'fixed z-30 select-none max-w-[94vw] transition-opacity'
     : 'absolute bottom-4 left-1/2 -translate-x-1/2 z-30 select-none max-w-[94vw] transition-opacity';
 
-  // Minimal bullet pill mode
+  // Minimal collapsed pill
   if (collapsed) {
     return (
       <div className={containerClasses} style={containerStyle}>
-        <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-card/90 backdrop-blur-md border border-border/80 shadow-2xl">
-          {/* Drag handle */}
+        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-card/92 backdrop-blur-md border border-border/80 shadow-2xl">
           <div
             onMouseDown={handleDragStart}
             className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground px-0.5 flex items-center"
@@ -169,8 +191,8 @@ export function ReplayControls({
 
           <button
             className="w-7 h-7 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
-            onClick={onStepBack}
-            title="Step Back"
+            onClick={() => onStep(-1)}
+            title="Step Back 1"
           >
             <SkipBack size={13} />
           </button>
@@ -185,20 +207,20 @@ export function ReplayControls({
 
           <button
             className="w-7 h-7 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
-            onClick={onStepForward}
-            title="Step Forward"
+            onClick={() => onStep(1)}
+            title="Step Forward 1"
           >
             <SkipForward size={13} />
           </button>
 
           <div className="w-px h-3.5 bg-border mx-0.5" />
 
-          {/* Opacity trigger */}
+          {/* Opacity popover */}
           <div className="relative flex items-center">
             <button
               onClick={() => setShowOpacitySlider((p) => !p)}
               className="p-1 rounded-full text-muted-foreground hover:text-foreground transition-colors"
-              title={`Adjust Opacity: ${opacity}%`}
+              title={`Opacity: ${opacity}%`}
             >
               <SlidersHorizontal size={11} />
             </button>
@@ -218,7 +240,7 @@ export function ReplayControls({
             )}
           </div>
 
-          {position && (
+          {dragPos && (
             <button
               onClick={handleResetPosition}
               className="p-1 rounded-full text-muted-foreground hover:text-primary transition-colors"
@@ -240,6 +262,7 @@ export function ReplayControls({
     );
   }
 
+  // Expanded bullet pill
   return (
     <div className={containerClasses} style={containerStyle}>
       <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-card/92 backdrop-blur-md border border-border/80 shadow-2xl text-foreground">
@@ -252,25 +275,34 @@ export function ReplayControls({
           <GripVertical size={14} />
         </div>
 
-        {/* Reset */}
+        {/* Reset / Restart */}
         <button
           className="w-7 h-7 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
-          onClick={onReset}
-          title="Reset to beginning"
+          onClick={onRestart}
+          title="Restart Replay"
         >
           <RotateCcw size={13} />
         </button>
 
-        {/* Step Back */}
+        {/* Big step back */}
+        <button
+          className="w-6 h-6 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
+          onClick={() => onStep(-STEP_BIG)}
+          title={`Back ${STEP_BIG} ${unitLabel}s (Shift+Left)`}
+        >
+          <ChevronsLeft size={13} />
+        </button>
+
+        {/* Step back 1 */}
         <button
           className="w-7 h-7 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
-          onClick={onStepBack}
-          title="Step Back (Left Arrow)"
+          onClick={() => onStep(-1)}
+          title={`Back 1 ${unitLabel} (Left Arrow)`}
         >
           <SkipBack size={14} />
         </button>
 
-        {/* Play / Pause - Glowing Center Button */}
+        {/* Play / Pause button */}
         <button
           className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:scale-105 active:scale-95 shadow-md shadow-primary/25 transition-all"
           onClick={onPlayPause}
@@ -279,102 +311,135 @@ export function ReplayControls({
           {isPlaying ? <Pause size={15} /> : <Play size={15} className="ml-0.5" />}
         </button>
 
-        {/* Step Forward */}
+        {/* Step forward 1 */}
         <button
           className="w-7 h-7 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
-          onClick={onStepForward}
-          title="Step Forward (Right Arrow)"
+          onClick={() => onStep(1)}
+          title={`Forward 1 ${unitLabel} (Right Arrow)`}
         >
           <SkipForward size={14} />
         </button>
 
+        {/* Big step forward */}
+        <button
+          className="w-6 h-6 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
+          onClick={() => onStep(STEP_BIG)}
+          title={`Forward ${STEP_BIG} ${unitLabel}s (Shift+Right)`}
+        >
+          <ChevronsRight size={13} />
+        </button>
+
         <div className="w-px h-4 bg-border mx-0.5" />
 
-        {/* Step Mode Toggle */}
+        {/* Step / Tick Resolution Selector */}
         <div className="flex items-center gap-0.5 bg-secondary/80 rounded-full p-0.5 border border-border">
-          <button
-            onClick={() => onStepModeChange('bar')}
-            className={`px-2 py-0.5 text-[11px] font-mono rounded-full transition-all ${
-              stepMode === 'bar'
-                ? 'bg-primary text-primary-foreground font-semibold shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-            title="Advance 1 bar of active chart timeframe per tick"
-          >
-            1 Bar
-          </button>
-          <button
-            onClick={() => onStepModeChange('time')}
-            className={`px-2 py-0.5 text-[11px] font-mono rounded-full flex items-center gap-1 transition-all ${
-              stepMode === 'time'
-                ? 'bg-primary text-primary-foreground font-semibold shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-            title="Advance by fixed timeframe increment per tick"
-          >
-            <Clock size={10} />
-            Time Step
-          </button>
+          {availableStepUnits.map((u) => (
+            <button
+              key={u}
+              onClick={() => onStepUnitChange(u)}
+              className={`px-2 py-0.5 text-[10px] font-mono uppercase rounded-full transition-all cursor-pointer ${
+                stepUnit === u
+                  ? 'bg-primary text-primary-foreground font-semibold shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              title={
+                u === 'bar'
+                  ? 'Step by base data bar'
+                  : u === 'candle'
+                  ? 'Step by chart timeframe candle'
+                  : `Intra-bar streaming step: ${u}`
+              }
+            >
+              {u}
+            </button>
+          ))}
         </div>
 
-        {/* Step Minutes Dropdown (when stepMode === 'time') */}
-        {stepMode === 'time' && (
-          <select
-            value={stepMinutes}
-            onChange={(e) => onStepMinutesChange(Number(e.target.value))}
-            className="bg-secondary text-secondary-foreground border border-border rounded-full px-2 py-0.5 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-            title="Replay step time increment"
+        {/* Custom Styled Playback Speed Menu */}
+        <div className="relative flex items-center" ref={speedMenuRef}>
+          <button
+            onClick={() => setShowSpeedMenu((p) => !p)}
+            className="flex items-center gap-1 bg-[#141413] hover:bg-[#1f1e1a] text-amber-400 border border-[#2a2926] rounded-full px-2.5 py-0.5 text-[11px] font-mono transition-all shadow-sm active:scale-95 cursor-pointer"
+            title="Select Playback Speed"
           >
-            {STEP_TIMEFRAMES.map((st) => (
-              <option key={st.minutes} value={st.minutes}>
-                {st.label} / tick
-              </option>
-            ))}
-          </select>
-        )}
+            <span className="font-semibold">{speed}x</span>
+            <ChevronDown size={11} className={`transition-transform duration-150 text-amber-400/80 ${showSpeedMenu ? 'rotate-180' : ''}`} />
+          </button>
 
-        {/* Speed / Delay Selector */}
-        <div className="flex items-center gap-1">
-          <Gauge size={12} className="text-muted-foreground ml-0.5" />
-          <select
-            value={intervalMs}
-            onChange={(e) => onIntervalChange(Number(e.target.value))}
-            className="bg-secondary text-secondary-foreground border border-border rounded-full px-2 py-0.5 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-            title="Playback Speed"
-          >
-            {SPEED_PRESETS.map((p) => (
-              <option key={p.ms} value={p.ms}>
-                {p.label}
-              </option>
-            ))}
-          </select>
+          {showSpeedMenu && (
+            <div className="absolute bottom-9 left-1/2 -translate-x-1/2 bg-[#141413]/95 backdrop-blur-md border border-[#2a2926] rounded-xl shadow-2xl p-2 grid grid-cols-4 gap-1 z-50 min-w-[210px] animate-in fade-in zoom-in-95 duration-100 select-none">
+              <div className="col-span-4 px-1 pb-1 text-[9px] font-mono uppercase tracking-wider text-muted-foreground border-b border-[#2a2926] mb-1 flex items-center justify-between">
+                <span>Playback Speed</span>
+                <span className="text-amber-500 font-bold">{speed}x</span>
+              </div>
+              {SPEEDS.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => {
+                    onSpeedChange(s);
+                    setShowSpeedMenu(false);
+                  }}
+                  className={`px-1.5 py-1 text-[11px] font-mono rounded-lg transition-all text-center cursor-pointer ${
+                    speed === s
+                      ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-black font-bold shadow-md shadow-amber-500/30'
+                      : 'text-zinc-300 hover:text-white hover:bg-white/10'
+                  }`}
+                >
+                  {s}x
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="w-px h-4 bg-border mx-0.5" />
 
-        {/* Progress Slider & UTC Scrubber */}
+        {/* Scrubber & Time */}
         <div className="flex items-center gap-2">
           <input
             type="range"
             min={1}
-            max={Math.max(1, totalBars)}
-            value={currentBar}
+            max={Math.max(1, total)}
+            value={position}
             onChange={(e) => onSeek(Number(e.target.value))}
             className="w-20 sm:w-28 md:w-36 h-1.5 accent-primary cursor-pointer bg-secondary rounded-full"
             title="Scrub replay position"
           />
 
           <div className="hidden sm:flex items-center gap-1.5 font-mono text-[11px] whitespace-nowrap">
-            {formattedTime && (
+            {timeFormatted && (
               <span className="text-primary font-semibold text-[10px] bg-primary/10 px-1.5 py-0.5 rounded-full border border-primary/20">
-                {formattedTime}
+                {timeFormatted}
               </span>
             )}
             <span className="text-muted-foreground text-[10px]">
-              {currentBar}/{totalBars}
+              {position.toLocaleString()}/{total.toLocaleString()} ({pct.toFixed(0)}%)
             </span>
           </div>
         </div>
+
+        {/* Pause on trade events */}
+        <button
+          onClick={() => onPauseOnTradeEventsChange(!pauseOnTradeEvents)}
+          className={`p-1 rounded-full text-xs transition-colors ${
+            pauseOnTradeEvents ? 'text-primary bg-primary/15' : 'text-muted-foreground hover:text-foreground'
+          }`}
+          title="Pause playback when an order fills or hits SL/TP"
+        >
+          <ShieldAlert size={13} />
+        </button>
+
+        {/* Set Start Point */}
+        <button
+          onClick={onSetStart}
+          className="p-1 rounded-full text-muted-foreground hover:text-foreground transition-colors"
+          title={`Make the current bar this session's start point (currently bar ${startPosition.toLocaleString()})`}
+        >
+          <Flag size={13} />
+        </button>
+
+        {/* Bookmarks slot */}
+        {bookmarks && <div className="flex items-center">{bookmarks}</div>}
 
         <div className="w-px h-4 bg-border mx-0.5" />
 
@@ -409,7 +474,7 @@ export function ReplayControls({
         </div>
 
         {/* Snap Back / Reset Position (if dragged away) */}
-        {position && (
+        {dragPos && (
           <button
             onClick={handleResetPosition}
             className="p-1 rounded-full text-muted-foreground hover:text-primary transition-colors"

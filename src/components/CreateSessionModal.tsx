@@ -1,317 +1,304 @@
 import { useState, useMemo, useEffect } from 'react';
 import {
-  saveSession,
-  generateUUID,
-  type BacktestSession,
-  type DateFilterConfig,
-  type StoredDataset,
-} from '@/lib/db/localDatabase';
-import type { OHLCVBar } from '@/lib/csvParser';
-import { timeframeToLabel } from '@/lib/timeframeEngine';
-import {
-  X,
-  Sparkles,
   Calendar,
+  Clock,
   DollarSign,
   TrendingUp,
-  Clock,
+  X,
+  Play,
+  Check,
+  CalendarRange,
   Layers,
-  Shuffle,
-  ShieldAlert,
-  Sliders,
+  Sparkles,
 } from 'lucide-react';
-import { toast } from 'sonner';
+import type { DatasetRecord, SessionRecord, DateRangeMode } from '@/lib/db';
+import { createSession } from '@/lib/store';
+import { formatTimeframe } from '@/lib/replay';
 
 interface CreateSessionModalProps {
   open: boolean;
   onClose: () => void;
-  dataset: StoredDataset | null;
-  currentBars: OHLCVBar[];
-  onSessionCreated: (session: BacktestSession) => void;
-  defaultBalance?: number;
+  dataset: DatasetRecord | null;
+  datasets?: DatasetRecord[];
+  onCreated: (session: SessionRecord) => void;
+  defaultStartingBalance?: number;
 }
 
 const BALANCE_PRESETS = [1000, 5000, 10000, 25000, 50000, 100000];
-
 const LEVERAGE_OPTIONS = [
   { value: 1, label: '1:1 (Cash / Spot)' },
-  { value: 10, label: '1:10 (Low)' },
+  { value: 10, label: '1:10' },
   { value: 20, label: '1:20' },
-  { value: 30, label: '1:30 (EU/UK Retail standard)' },
-  { value: 50, label: '1:50 (US Retail standard)' },
-  { value: 100, label: '1:100 (Standard Pro)' },
+  { value: 30, label: '1:30 (Retail FX)' },
+  { value: 50, label: '1:50' },
+  { value: 100, label: '1:100 (Pro)' },
   { value: 200, label: '1:200' },
-  { value: 500, label: '1:500 (High Leverage)' },
+  { value: 500, label: '1:500 (Max)' },
+];
+
+const TIMEFRAME_OPTIONS = [
+  { minutes: 1, label: '1m' },
+  { minutes: 5, label: '5m' },
+  { minutes: 15, label: '15m' },
+  { minutes: 30, label: '30m' },
+  { minutes: 60, label: '1H' },
+  { minutes: 240, label: '4H' },
+  { minutes: 1440, label: '1D' },
 ];
 
 const MONTH_NAMES = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
 ];
+
+const toISODate = (unixSec: number) => new Date(unixSec * 1000).toISOString().slice(0, 10);
 
 export function CreateSessionModal({
   open,
   onClose,
   dataset,
-  currentBars,
-  onSessionCreated,
-  defaultBalance = 10000,
+  datasets,
+  onCreated,
+  defaultStartingBalance = 10000,
 }: CreateSessionModalProps) {
-  const symbol = dataset?.symbol || 'DATA';
-  const baseTf = dataset?.baseTimeframe || 60;
+  const [selectedDatasetId, setSelectedDatasetId] = useState<string>(dataset?.id || datasets?.[0]?.id || '');
 
-  // Form states
-  const [name, setName] = useState('');
-  const [balance, setBalance] = useState<number>(defaultBalance);
-  const [leverage, setLeverage] = useState<number>(30);
-  const [timeframe, setTimeframe] = useState<number>(baseTf);
-  const [filterMode, setFilterMode] = useState<'all' | 'years' | 'months' | 'custom' | 'blind'>('all');
-  const [selectedYears, setSelectedYears] = useState<number[]>([]);
-  const [selectedMonths, setSelectedMonths] = useState<number[]>([]);
-  const [customStart, setCustomStart] = useState('');
-  const [customEnd, setCustomEnd] = useState('');
-  const [blindDays, setBlindDays] = useState(60);
-  const [notes, setNotes] = useState('');
-
-  // Extract detected years
-  const availableYears = useMemo(() => {
-    if (currentBars.length === 0) return [];
-    const set = new Set<number>();
-    for (let i = 0; i < currentBars.length; i += Math.max(1, Math.floor(currentBars.length / 500))) {
-      set.add(new Date(currentBars[i].time * 1000).getUTCFullYear());
-    }
-    return Array.from(set).sort((a, b) => a - b);
-  }, [currentBars]);
-
-  // Overall dates
-  const datasetSpan = useMemo(() => {
-    if (currentBars.length === 0) return null;
-    const start = new Date(currentBars[0].time * 1000);
-    const end = new Date(currentBars[currentBars.length - 1].time * 1000);
-    return {
-      startStr: start.toISOString().split('T')[0],
-      endStr: end.toISOString().split('T')[0],
-      startTime: currentBars[0].time,
-      endTime: currentBars[currentBars.length - 1].time,
-    };
-  }, [currentBars]);
-
-  // Initialize defaults on open
   useEffect(() => {
-    if (open) {
-      const now = new Date();
-      setName(`${symbol} Session - ${now.toLocaleDateString()}`);
-      setBalance(defaultBalance);
-      setLeverage(30);
-      setTimeframe(baseTf);
-      setFilterMode('all');
-      setSelectedYears(availableYears.length > 0 ? [availableYears[availableYears.length - 1]] : []);
-      setSelectedMonths([]);
-      if (datasetSpan) {
-        setCustomStart(datasetSpan.startStr);
-        setCustomEnd(datasetSpan.endStr);
-      }
-      setBlindDays(60);
-      setNotes('');
+    if (dataset) setSelectedDatasetId(dataset.id);
+    else if (datasets && datasets.length > 0 && !selectedDatasetId) setSelectedDatasetId(datasets[0].id);
+  }, [dataset, datasets, selectedDatasetId]);
+
+  const currentDataset = useMemo(() => {
+    return (datasets?.find((d) => d.id === selectedDatasetId) || dataset || datasets?.[0]) ?? null;
+  }, [datasets, selectedDatasetId, dataset]);
+
+  if (!open || !currentDataset) return null;
+
+  return (
+    <CreateSessionModalInner
+      open={open}
+      onClose={onClose}
+      dataset={currentDataset}
+      datasets={datasets}
+      onSelectDatasetId={setSelectedDatasetId}
+      onCreated={onCreated}
+      defaultStartingBalance={defaultStartingBalance}
+    />
+  );
+}
+
+function CreateSessionModalInner({
+  open,
+  onClose,
+  dataset,
+  datasets,
+  onSelectDatasetId,
+  onCreated,
+  defaultStartingBalance = 10000,
+}: CreateSessionModalProps & { onSelectDatasetId: (id: string) => void }) {
+  const minDate = toISODate(dataset.firstTime);
+  const maxDate = toISODate(dataset.lastTime);
+
+  const availableYears = useMemo(() => {
+    const startY = new Date(dataset.firstTime * 1000).getUTCFullYear();
+    const endY = new Date(dataset.lastTime * 1000).getUTCFullYear();
+    const yrs: number[] = [];
+    for (let y = startY; y <= endY; y++) yrs.push(y);
+    return yrs;
+  }, [dataset]);
+
+  // Session form state
+  const [sessionName, setSessionName] = useState('');
+  const [balance, setBalance] = useState(defaultStartingBalance);
+  const [leverage, setLeverage] = useState(30);
+  const [timeframe, setTimeframe] = useState(dataset.baseTimeframe);
+
+  // Date range mode: DEFAULT is 'daily' (choose exact start and end day/month/year)
+  const [rangeMode, setRangeMode] = useState<DateRangeMode>('daily');
+  const [startDate, setStartDate] = useState(minDate);
+  const [endDate, setEndDate] = useState(maxDate);
+
+  // Year mode selection
+  const [selectedYear, setSelectedYear] = useState<number>(availableYears[availableYears.length - 1] || 2024);
+
+  // Month mode selection
+  const [selectedMonthYear, setSelectedMonthYear] = useState<number>(availableYears[availableYears.length - 1] || 2024);
+  const [selectedMonth, setSelectedMonth] = useState<number>(new Date(dataset.lastTime * 1000).getUTCMonth());
+
+  const [loading, setLoading] = useState(false);
+
+  // Synchronize start & end date when mode changes
+  useEffect(() => {
+    if (rangeMode === 'all') {
+      setStartDate(minDate);
+      setEndDate(maxDate);
+    } else if (rangeMode === 'yearly') {
+      const s = `${selectedYear}-01-01`;
+      const e = `${selectedYear}-12-31`;
+      setStartDate(s < minDate ? minDate : s);
+      setEndDate(e > maxDate ? maxDate : e);
+    } else if (rangeMode === 'monthly') {
+      const lastDay = new Date(Date.UTC(selectedMonthYear, selectedMonth + 1, 0)).getUTCDate();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const s = `${selectedMonthYear}-${pad(selectedMonth + 1)}-01`;
+      const e = `${selectedMonthYear}-${pad(selectedMonth + 1)}-${pad(lastDay)}`;
+      setStartDate(s < minDate ? minDate : s);
+      setEndDate(e > maxDate ? maxDate : e);
     }
-  }, [open, symbol, baseTf, defaultBalance, availableYears, datasetSpan]);
+  }, [rangeMode, selectedYear, selectedMonthYear, selectedMonth, minDate, maxDate]);
 
-  if (!open) return null;
+  // Calculate days in selected window
+  const daysDiff = useMemo(() => {
+    try {
+      const t1 = new Date(startDate).getTime();
+      const t2 = new Date(endDate).getTime();
+      const diff = Math.max(1, Math.round((t2 - t1) / (1000 * 3600 * 24)) + 1);
+      return isNaN(diff) ? 1 : diff;
+    } catch {
+      return 1;
+    }
+  }, [startDate, endDate]);
 
-  const handleToggleYear = (y: number) => {
-    setSelectedYears((prev) => (prev.includes(y) ? prev.filter((item) => item !== y) : [...prev, y]));
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const finalName = sessionName.trim() || `${dataset.name} · ${startDate} → ${endDate}`;
+      const session = await createSession({
+        name: finalName,
+        dataset,
+        startingBalance: balance,
+        leverage,
+        timeframe,
+        dateRangeMode: rangeMode,
+        startDate: rangeMode === 'all' ? undefined : startDate,
+        endDate: rangeMode === 'all' ? undefined : endDate,
+      });
+      onCreated(session);
+      onClose();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleToggleMonth = (m: number) => {
-    setSelectedMonths((prev) => (prev.includes(m) ? prev.filter((item) => item !== m) : [...prev, m]));
-  };
-
-  const handleCreate = async () => {
-    if (!name.trim()) {
-      toast.error('Please enter a session name');
-      return;
-    }
-
-    if (balance <= 0) {
-      toast.error('Starting balance must be greater than 0');
-      return;
-    }
-
-    let dateFilter: DateFilterConfig = { mode: filterMode };
-    let initialTimestamp = currentBars[0]?.time || Math.floor(Date.now() / 1000);
-
-    if (filterMode === 'years') {
-      if (selectedYears.length === 0) {
-        toast.error('Please select at least one year');
-        return;
-      }
-      const minYear = Math.min(...selectedYears);
-      const maxYear = Math.max(...selectedYears);
-      dateFilter = {
-        mode: 'years',
-        startYear: minYear,
-        endYear: maxYear,
-      };
-      // Find first bar in selected years
-      const match = currentBars.find((b) => selectedYears.includes(new Date(b.time * 1000).getUTCFullYear()));
-      if (match) initialTimestamp = match.time;
-    } else if (filterMode === 'months') {
-      if (selectedMonths.length === 0) {
-        toast.error('Please select at least one month');
-        return;
-      }
-      dateFilter = {
-        mode: 'months',
-        months: selectedMonths,
-      };
-      const match = currentBars.find((b) => selectedMonths.includes(new Date(b.time * 1000).getUTCMonth()));
-      if (match) initialTimestamp = match.time;
-    } else if (filterMode === 'custom') {
-      const startSec = customStart ? Math.floor(new Date(customStart + 'T00:00:00Z').getTime() / 1000) : undefined;
-      const endSec = customEnd ? Math.floor(new Date(customEnd + 'T23:59:59Z').getTime() / 1000) : undefined;
-      dateFilter = {
-        mode: 'custom',
-        customStart: startSec,
-        customEnd: endSec,
-      };
-      if (startSec) {
-        const match = currentBars.find((b) => b.time >= startSec);
-        if (match) initialTimestamp = match.time;
-      }
-    } else if (filterMode === 'blind') {
-      const totalSec = blindDays * 86400;
-      const minTime = datasetSpan?.startTime || 0;
-      const maxTime = datasetSpan?.endTime || 0;
-      const span = maxTime - minTime;
-      let startSec = minTime;
-      if (span > totalSec) {
-        startSec = minTime + Math.floor(Math.random() * (span - totalSec));
-      }
-      const endSec = startSec + totalSec;
-      dateFilter = {
-        mode: 'custom',
-        customStart: startSec,
-        customEnd: endSec,
-        blindWindowDays: blindDays,
-      };
-      const match = currentBars.find((b) => b.time >= startSec);
-      if (match) initialTimestamp = match.time;
-    } else {
-      // mode: 'all'
-      const defaultIdx = Math.min(50, currentBars.length - 1);
-      initialTimestamp = currentBars[defaultIdx]?.time || currentBars[0]?.time || 0;
-    }
-
-    const session: BacktestSession = {
-      id: generateUUID(),
-      name: name.trim(),
-      datasetId: dataset?.id || 'default',
-      symbol,
-      timeframe,
-      currentTimestamp: initialTimestamp,
-      speed: 1,
-      stepMode: 'bar',
-      stepMinutes: timeframe,
-      dateFilter,
-      drawings: [],
-      orders: [],
-      startingBalance: balance,
-      leverage,
-      notes: notes.trim(),
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-
-    await saveSession(session);
-    toast.success(`Session "${session.name}" created and loaded!`);
-    onSessionCreated(session);
-    onClose();
+  const handleQuickPreset = (days: number) => {
+    const endMs = new Date(maxDate).getTime();
+    const startMs = Math.max(new Date(minDate).getTime(), endMs - days * 86400 * 1000);
+    setStartDate(new Date(startMs).toISOString().slice(0, 10));
+    setEndDate(maxDate);
+    setRangeMode('daily');
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-      <div className="bg-card border border-border rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden text-foreground animate-in fade-in zoom-in-95 duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+      <div className="w-full max-w-xl bg-card border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden max-h-[92vh]">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-card/80">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-primary/20 text-primary flex items-center justify-center border border-primary/30">
-              <Sparkles size={18} />
-            </div>
-            <div>
-              <h2 className="text-base font-bold text-foreground">Create Backtest Session</h2>
-              <p className="text-xs text-muted-foreground">
-                Configure account balance, leverage, and designated Data Times for {symbol}
-              </p>
-            </div>
+        <div className="px-5 py-3.5 border-b border-border flex items-center justify-between bg-card">
+          <div className="flex items-center gap-2">
+            <Sparkles size={16} className="text-primary" />
+            <h2 className="text-sm font-bold text-foreground">Create Backtesting Session</h2>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            className="p-1 text-muted-foreground hover:text-foreground rounded transition-colors"
           >
-            <X size={18} />
+            <X size={15} />
           </button>
         </div>
 
-        {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {/* Content Form */}
+        <form onSubmit={handleSubmit} className="p-5 overflow-y-auto space-y-4 flex-1">
+          {/* Dataset Info Banner */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 rounded-lg bg-secondary/40 border border-border text-xs">
+            <div className="min-w-0 flex-1">
+              {datasets && datasets.length > 1 ? (
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-foreground text-xs shrink-0">Dataset:</span>
+                  <select
+                    value={dataset.id}
+                    onChange={(e) => onSelectDatasetId(e.target.value)}
+                    className="bg-card text-foreground font-semibold text-xs border border-border rounded px-2 py-1 max-w-[220px] truncate focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    {datasets.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name} ({formatTimeframe(d.baseTimeframe)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <span className="font-semibold text-foreground text-sm">{dataset.name}</span>
+              )}
+              <div className="font-mono text-[11px] text-muted-foreground mt-0.5">
+                Base TF: {formatTimeframe(dataset.baseTimeframe)} · {dataset.barCount.toLocaleString()} bars
+              </div>
+            </div>
+            <div className="font-mono text-[11px] text-primary bg-primary/10 px-2 py-0.5 rounded border border-primary/20 shrink-0 self-start sm:self-center">
+              {minDate} → {maxDate}
+            </div>
+          </div>
+
           {/* Session Name */}
           <div>
-            <label className="text-xs font-semibold text-foreground uppercase tracking-wider block mb-1.5">
+            <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">
               Session Name
             </label>
             <input
               type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. 2023 Trend Following Test"
-              className="w-full bg-secondary text-foreground border border-border rounded-lg px-3.5 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+              value={sessionName}
+              onChange={(e) => setSessionName(e.target.value)}
+              placeholder={`${dataset.name} · ${startDate} Backtest`}
+              className="w-full bg-secondary text-foreground border border-border rounded-md px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
             />
           </div>
 
-          {/* Account Balance & Leverage Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {/* Account Starting Balance */}
+          {/* Starting Balance & Leverage Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Balance */}
             <div>
-              <label className="text-xs font-semibold text-foreground uppercase tracking-wider flex items-center gap-1 mb-1.5">
-                <DollarSign size={13} className="text-primary" />
-                Starting Balance ($)
+              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">
+                Account Balance
               </label>
-              <div className="grid grid-cols-3 gap-1.5 mb-2">
+              <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
                 {BALANCE_PRESETS.map((p) => (
                   <button
                     key={p}
                     type="button"
                     onClick={() => setBalance(p)}
-                    className={`py-1 text-xs font-mono rounded border transition-all ${
+                    className={`px-2 py-0.5 text-[10px] font-mono rounded transition-colors ${
                       balance === p
-                        ? 'bg-primary/20 text-primary border-primary font-bold'
-                        : 'bg-secondary text-secondary-foreground border-border hover:bg-accent'
+                        ? 'bg-primary text-primary-foreground font-semibold'
+                        : 'bg-secondary text-muted-foreground hover:text-foreground'
                     }`}
                   >
-                    ${p >= 1000 ? `${p / 1000}k` : p}
+                    ${(p / 1000).toFixed(0)}k
                   </button>
                 ))}
               </div>
-              <input
-                type="number"
-                min={100}
-                step={500}
-                value={balance}
-                onChange={(e) => setBalance(Number(e.target.value))}
-                className="w-full bg-secondary text-foreground border border-border rounded-lg px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary"
-              />
+              <div className="relative">
+                <DollarSign size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="number"
+                  min={100}
+                  step={100}
+                  value={balance}
+                  onChange={(e) => setBalance(Math.max(100, Number(e.target.value)))}
+                  className="w-full bg-secondary text-foreground border border-border rounded-md pl-7 pr-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
             </div>
 
-            {/* Account Leverage */}
+            {/* Leverage */}
             <div>
-              <label className="text-xs font-semibold text-foreground uppercase tracking-wider flex items-center gap-1 mb-1.5">
-                <TrendingUp size={13} className="text-primary" />
-                Leverage (Optional)
+              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">
+                Account Leverage
               </label>
               <select
                 value={leverage}
                 onChange={(e) => setLeverage(Number(e.target.value))}
-                className="w-full bg-secondary text-foreground border border-border rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary h-[38px] mb-2"
+                className="w-full bg-secondary text-foreground border border-border rounded-md px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer mt-5"
               >
                 {LEVERAGE_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
@@ -319,220 +306,255 @@ export function CreateSessionModal({
                   </option>
                 ))}
               </select>
-              <div className="text-[11px] text-muted-foreground flex items-center gap-1">
-                <span>Margin required per 1.0 lot:</span>
-                <span className="font-mono text-primary font-semibold">
-                  ${(100000 / leverage).toFixed(0)}
-                </span>
-              </div>
             </div>
           </div>
 
-          {/* Timeframe Selection */}
+          {/* Initial Timeframe */}
           <div>
-            <label className="text-xs font-semibold text-foreground uppercase tracking-wider flex items-center gap-1 mb-1.5">
-              <Clock size={13} className="text-primary" />
-              Starting Chart Timeframe
+            <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1.5">
+              Initial Replay Timeframe
             </label>
-            <div className="flex flex-wrap gap-1.5">
-              {[
-                { m: 1, label: '1m' },
-                { m: 5, label: '5m' },
-                { m: 15, label: '15m' },
-                { m: 60, label: '1H' },
-                { m: 240, label: '4H' },
-                { m: 1440, label: '1D' },
-              ].map(({ m, label }) => (
+            <div className="flex items-center gap-1 flex-wrap">
+              {TIMEFRAME_OPTIONS.map((tf) => (
                 <button
-                  key={m}
+                  key={tf.minutes}
                   type="button"
-                  onClick={() => setTimeframe(m)}
-                  className={`px-3 py-1 text-xs font-mono rounded-md border transition-all ${
-                    timeframe === m
-                      ? 'bg-primary/20 text-primary border-primary font-bold'
-                      : 'bg-secondary text-secondary-foreground border-border hover:bg-accent'
+                  onClick={() => setTimeframe(tf.minutes)}
+                  className={`px-2.5 py-1 text-xs font-mono rounded-md transition-colors ${
+                    timeframe === tf.minutes
+                      ? 'bg-primary text-primary-foreground font-semibold shadow-sm'
+                      : 'bg-secondary text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  {label}
+                  {tf.label}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Data Times / Date Range Filtering */}
-          <div className="border border-border/80 rounded-lg p-4 bg-secondary/20">
-            <div className="flex items-center justify-between mb-3">
-              <label className="text-xs font-semibold text-foreground uppercase tracking-wider flex items-center gap-1.5">
-                <Calendar size={14} className="text-primary" />
-                Data Times (Date Range for Backtest)
+          {/* Date Range Selection ("Data Times") */}
+          <div className="pt-2 border-t border-border">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                <CalendarRange size={13} className="text-primary" />
+                Data Times (Date Range)
               </label>
-              {datasetSpan && (
-                <span className="text-[11px] font-mono text-muted-foreground">
-                  Dataset: {datasetSpan.startStr} &rarr; {datasetSpan.endStr}
-                </span>
-              )}
+              <span className="text-[10px] font-mono text-primary font-medium">
+                {daysDiff} days selected
+              </span>
             </div>
 
-            {/* Filter Mode Tabs */}
-            <div className="grid grid-cols-5 gap-1 bg-secondary/60 p-1 rounded-lg border border-border mb-4">
-              {[
-                { id: 'all' as const, label: 'All Data' },
-                { id: 'years' as const, label: 'Years' },
-                { id: 'months' as const, label: 'Months' },
-                { id: 'custom' as const, label: 'Custom' },
-                { id: 'blind' as const, label: 'Blind 🎲' },
-              ].map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setFilterMode(tab.id)}
-                  className={`py-1 text-xs font-medium rounded transition-colors ${
-                    filterMode === tab.id
-                      ? 'bg-primary text-primary-foreground font-semibold shadow'
-                      : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
+            {/* Range Mode Switcher */}
+            <div className="flex items-center gap-1 p-0.5 bg-secondary rounded-lg border border-border mb-3 text-xs">
+              <button
+                type="button"
+                onClick={() => setRangeMode('daily')}
+                className={`flex-1 py-1 rounded-md text-center font-medium transition-all ${
+                  rangeMode === 'daily'
+                    ? 'bg-primary text-primary-foreground font-semibold shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Daily / Custom
+              </button>
+              <button
+                type="button"
+                onClick={() => setRangeMode('yearly')}
+                className={`flex-1 py-1 rounded-md text-center font-medium transition-all ${
+                  rangeMode === 'yearly'
+                    ? 'bg-primary text-primary-foreground font-semibold shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Year-Based
+              </button>
+              <button
+                type="button"
+                onClick={() => setRangeMode('monthly')}
+                className={`flex-1 py-1 rounded-md text-center font-medium transition-all ${
+                  rangeMode === 'monthly'
+                    ? 'bg-primary text-primary-foreground font-semibold shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Monthly
+              </button>
+              <button
+                type="button"
+                onClick={() => setRangeMode('all')}
+                className={`flex-1 py-1 rounded-md text-center font-medium transition-all ${
+                  rangeMode === 'all'
+                    ? 'bg-primary text-primary-foreground font-semibold shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                All Data
+              </button>
             </div>
 
-            {/* Mode Specific Inputs */}
-            {filterMode === 'all' && (
-              <p className="text-xs text-muted-foreground">
-                Replay will use the entire dataset ({currentBars.length.toLocaleString()} bars) with no date exclusions.
-              </p>
-            )}
+            {/* Daily / Custom Date Mode (DEFAULT) */}
+            {rangeMode === 'daily' && (
+              <div className="space-y-2.5 bg-secondary/30 p-3 rounded-lg border border-border">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-mono text-muted-foreground block mb-1">
+                      Start Day / Month / Year
+                    </label>
+                    <input
+                      type="date"
+                      min={minDate}
+                      max={maxDate}
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="w-full bg-secondary text-foreground border border-border rounded px-2.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-mono text-muted-foreground block mb-1">
+                      End Day / Month / Year
+                    </label>
+                    <input
+                      type="date"
+                      min={startDate || minDate}
+                      max={maxDate}
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="w-full bg-secondary text-foreground border border-border rounded px-2.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                    />
+                  </div>
+                </div>
 
-            {filterMode === 'years' && (
-              <div>
-                <p className="text-xs text-muted-foreground mb-2">Select which years to include in this backtest:</p>
-                <div className="flex flex-wrap gap-2">
-                  {availableYears.map((yr) => (
+                {/* Quick Presets */}
+                <div className="flex items-center gap-1.5 pt-1">
+                  <span className="text-[10px] text-muted-foreground font-mono">Quick:</span>
+                  {[
+                    { days: 30, label: 'Last 30d' },
+                    { days: 90, label: 'Last 90d' },
+                    { days: 180, label: 'Last 180d' },
+                    { days: 365, label: 'Last 1 Year' },
+                  ].map((p) => (
                     <button
-                      key={yr}
+                      key={p.days}
                       type="button"
-                      onClick={() => handleToggleYear(yr)}
-                      className={`px-3 py-1.5 rounded-md text-xs font-mono border transition-all ${
-                        selectedYears.includes(yr)
-                          ? 'bg-primary/20 text-primary border-primary font-bold shadow-sm'
-                          : 'bg-secondary text-secondary-foreground border-border hover:bg-accent'
-                      }`}
+                      onClick={() => handleQuickPreset(p.days)}
+                      className="px-2 py-0.5 text-[10px] bg-secondary text-muted-foreground hover:text-foreground rounded border border-border"
                     >
-                      {yr}
+                      {p.label}
                     </button>
                   ))}
                 </div>
               </div>
             )}
 
-            {filterMode === 'months' && (
-              <div>
-                <p className="text-xs text-muted-foreground mb-2">Filter by calendar months (e.g. test seasonal performance):</p>
-                <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">
-                  {MONTH_NAMES.map((name, idx) => (
+            {/* Year-Based Mode */}
+            {rangeMode === 'yearly' && (
+              <div className="space-y-2 bg-secondary/30 p-3 rounded-lg border border-border">
+                <label className="text-[10px] font-mono text-muted-foreground block mb-1">
+                  Select Target Year
+                </label>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {availableYears.map((y) => (
                     <button
-                      key={name}
+                      key={y}
                       type="button"
-                      onClick={() => handleToggleMonth(idx)}
-                      className={`py-1 rounded text-xs font-mono border transition-all ${
-                        selectedMonths.includes(idx)
-                          ? 'bg-primary/20 text-primary border-primary font-bold'
-                          : 'bg-secondary text-secondary-foreground border-border hover:bg-accent'
+                      onClick={() => setSelectedYear(y)}
+                      className={`px-3 py-1.5 text-xs font-mono rounded-md border transition-all ${
+                        selectedYear === y
+                          ? 'bg-primary text-primary-foreground font-bold border-primary shadow-sm'
+                          : 'bg-secondary text-foreground border-border hover:border-primary/40'
                       }`}
                     >
-                      {name}
+                      {y}
                     </button>
                   ))}
+                </div>
+                <div className="text-[11px] font-mono text-muted-foreground pt-1">
+                  Range: Jan 1, {selectedYear} → Dec 31, {selectedYear}
                 </div>
               </div>
             )}
 
-            {filterMode === 'custom' && (
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] text-muted-foreground block mb-1">Start Date</label>
-                  <input
-                    type="date"
-                    value={customStart}
-                    min={datasetSpan?.startStr}
-                    max={datasetSpan?.endStr}
-                    onChange={(e) => setCustomStart(e.target.value)}
-                    className="w-full bg-secondary text-foreground border border-border rounded px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                  />
+            {/* Monthly Mode */}
+            {rangeMode === 'monthly' && (
+              <div className="space-y-2.5 bg-secondary/30 p-3 rounded-lg border border-border">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-mono text-muted-foreground block mb-1">
+                      Year
+                    </label>
+                    <select
+                      value={selectedMonthYear}
+                      onChange={(e) => setSelectedMonthYear(Number(e.target.value))}
+                      className="w-full bg-secondary text-foreground border border-border rounded px-2.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                    >
+                      {availableYears.map((y) => (
+                        <option key={y} value={y}>
+                          {y}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-mono text-muted-foreground block mb-1">
+                      Month
+                    </label>
+                    <select
+                      value={selectedMonth}
+                      onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                      className="w-full bg-secondary text-foreground border border-border rounded px-2.5 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                    >
+                      {MONTH_NAMES.map((m, idx) => (
+                        <option key={m} value={idx}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <label className="text-[11px] text-muted-foreground block mb-1">End Date</label>
-                  <input
-                    type="date"
-                    value={customEnd}
-                    min={datasetSpan?.startStr}
-                    max={datasetSpan?.endStr}
-                    onChange={(e) => setCustomEnd(e.target.value)}
-                    className="w-full bg-secondary text-foreground border border-border rounded px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                  />
+                <div className="text-[11px] font-mono text-muted-foreground pt-1">
+                  Range: {MONTH_NAMES[selectedMonth]} 1, {selectedMonthYear} → End of month
                 </div>
               </div>
             )}
 
-            {filterMode === 'blind' && (
-              <div className="space-y-2">
-                <p className="text-xs text-muted-foreground">
-                  Picks a random continuous time slice within the dataset for unbiased blind backtesting.
-                </p>
-                <div className="flex items-center gap-2">
-                  {[30, 60, 90, 180].map((d) => (
-                    <button
-                      key={d}
-                      type="button"
-                      onClick={() => setBlindDays(d)}
-                      className={`px-3 py-1 rounded text-xs font-mono border transition-all ${
-                        blindDays === d
-                          ? 'bg-primary/20 text-primary border-primary font-bold'
-                          : 'bg-secondary text-secondary-foreground border-border hover:bg-accent'
-                      }`}
-                    >
-                      {d} Days
-                    </button>
-                  ))}
-                </div>
+            {/* All Data Mode */}
+            {rangeMode === 'all' && (
+              <div className="bg-secondary/30 p-3 rounded-lg border border-border text-xs text-muted-foreground font-mono">
+                Replaying all {dataset.barCount.toLocaleString()} bars from {minDate} to {maxDate}.
               </div>
             )}
           </div>
 
-          {/* Notes / Strategy Focus */}
-          <div>
-            <label className="text-xs font-semibold text-foreground uppercase tracking-wider block mb-1.5">
-              Session Goal / Strategy Notes (Optional)
-            </label>
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="e.g. Testing 15m Fair Value Gap entries with 1:2 R:R targets and $200 risk per trade"
-              rows={2}
-              className="w-full bg-secondary text-foreground border border-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-            />
+          {/* Telemetry Preview Summary */}
+          <div className="p-3 bg-primary/5 rounded-lg border border-primary/20 flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2">
+              <Clock size={14} className="text-primary" />
+              <span className="text-foreground font-medium">Replay Window</span>
+            </div>
+            <div className="font-mono text-primary font-semibold">
+              {startDate} → {endDate} ({daysDiff} days)
+            </div>
           </div>
-        </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-between px-6 py-4 border-t border-border bg-card/80">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 text-xs font-medium rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleCreate}
-            className="px-5 py-2 text-xs font-bold rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 glow-primary flex items-center gap-2 transition-all"
-          >
-            <Sparkles size={14} />
-            Launch Backtest Session
-          </button>
-        </div>
+          {/* Submit */}
+          <div className="pt-2 flex items-center justify-end gap-2 border-t border-border">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground rounded transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="px-4 py-1.5 bg-primary text-primary-foreground text-xs font-semibold rounded-md hover:bg-primary/90 flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            >
+              <Play size={13} />
+              {loading ? 'Creating...' : 'Create & Launch Replay'}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

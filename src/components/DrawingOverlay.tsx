@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import type { Drawing, DrawingType, DrawingPoint, LineStyle } from '@/lib/drawings';
 import { createDrawingId, DEFAULT_COLORS, DEFAULT_FIB_LEVELS, DEFAULT_FIB_EXT_LEVELS, getClicksNeeded } from '@/lib/drawings';
+import type { Order } from '@/lib/tradeEngine';
 import { DrawingFloatingToolbar } from './DrawingFloatingToolbar';
 
 import type { OHLCVBar } from '@/lib/csvParser';
@@ -10,9 +11,13 @@ interface DrawingOverlayProps {
   chart: IChartApi | null;
   series: ISeriesApi<'Candlestick'> | null;
   activeTool: DrawingType | null;
+  onToolChange?: (tool: DrawingType | null) => void;
   drawings: Drawing[];
   onDrawingsChange: (drawings: Drawing[]) => void;
   containerRef: React.RefObject<HTMLDivElement>;
+  timeframe?: number;
+  orders?: Order[];
+  onUpdateOrder?: (orderId: string, updates: { stopLoss?: number; takeProfit?: number; limitPrice?: number }) => void;
   onPlacePendingOrder?: (side: 'buy' | 'sell', price: number, sl?: number, tp?: number) => void;
   magnetMode?: boolean;
   lockAllDrawings?: boolean;
@@ -58,18 +63,20 @@ export function DrawingOverlay({
   chart,
   series,
   activeTool,
+  onToolChange,
   drawings,
   onDrawingsChange,
   containerRef,
+  timeframe = 60,
+  orders,
+  onUpdateOrder,
   onPlacePendingOrder,
-  magnetMode = false,
-  lockAllDrawings = false,
-  hideAllDrawings = false,
-  visibleBars = [],
 }: DrawingOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pendingPointsRef = useRef<DrawingPoint[]>([]);
   const mouseRef = useRef<{ x: number; y: number } | null>(null);
+  const boundsRef = useRef<{ width: number; height: number; dpr: number }>({ width: 0, height: 0, dpr: 1 });
+  const renderFnRef = useRef<(() => void) | null>(null);
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
   const [hoveredDrawingId, setHoveredDrawingId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; drawingId: string } | null>(null);
@@ -81,49 +88,129 @@ export function DrawingOverlay({
     originalPoints: DrawingPoint[];
     originalDrawing: Drawing;
   } | null>(null);
+  const [orderDragState, setOrderDragState] = useState<{
+    orderId: string;
+    type: 'sl' | 'tp';
+    startPrice: number;
+    currentPrice: number;
+    side: 'buy' | 'sell';
+    entryPrice: number;
+    size: number;
+  } | null>(null);
+  const previewDrawingRef = useRef<Drawing | null>(null);
+  const orderDragRef = useRef<{
+    orderId: string;
+    type: 'sl' | 'tp';
+    startPrice: number;
+    currentPrice: number;
+    side: 'buy' | 'sell';
+    entryPrice: number;
+    size: number;
+  } | null>(null);
+  const undoStackRef = useRef<Drawing[][]>([]);
   const [toolbarPos, setToolbarPos] = useState<{ x: number; y: number } | null>(null);
   const isBrushing = useRef(false);
   const brushPointsRef = useRef<{ x: number; y: number }[]>([]);
+  const isDraggingRef = useRef(false);
+  const isShiftHeldRef = useRef(false);
+
+  // Track Shift key for geometric constraint snapping
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      isShiftHeldRef.current = e.shiftKey;
+      renderFnRef.current?.();
+    };
+    window.addEventListener('keydown', handleKey);
+    window.addEventListener('keyup', handleKey);
+    return () => {
+      window.removeEventListener('keydown', handleKey);
+      window.removeEventListener('keyup', handleKey);
+    };
+  }, []);
 
   const selectedDrawing = drawings.find(d => d.id === selectedDrawingId) || null;
+
+  /**
+   * Resilient time-scale wrapper that supports future blank areas and empty charts.
+   * Extrapolates time and coordinates from the logical axis when data points are unrendered.
+   */
+  const getSafeTimeScale = useCallback((timeScale: any) => {
+    const intervalSec = Math.max(60, Math.round((timeframe || 60) * 60));
+    return {
+      timeToCoordinate: (time: any): number | null => {
+        const direct = timeScale.timeToCoordinate(time);
+        if (direct !== null) return direct;
+        const range = timeScale.getVisibleLogicalRange();
+        if (!range) return null;
+        const fromX = timeScale.logicalToCoordinate(range.from as any);
+        const fromTime = fromX !== null ? (timeScale.coordinateToTime(fromX) as number | null) : null;
+        if (fromTime !== null && fromX !== null) {
+          const targetLogical = (range.from as number) + (Number(time) - fromTime) / intervalSec;
+          return timeScale.logicalToCoordinate(targetLogical as any);
+        }
+        return null;
+      },
+      coordinateToTime: (x: number): number | null => {
+        const direct = timeScale.coordinateToTime(x);
+        if (direct !== null) return direct;
+        const logical = timeScale.coordinateToLogical(x);
+        if (logical !== null) {
+          const range = timeScale.getVisibleLogicalRange();
+          if (range) {
+            const fromX = timeScale.logicalToCoordinate(range.from as any);
+            const fromTime = fromX !== null ? (timeScale.coordinateToTime(fromX) as number | null) : null;
+            if (fromTime !== null) {
+              return Math.round(fromTime + ((logical as number) - (range.from as number)) * intervalSec);
+            }
+          }
+          return Math.round(Date.now() / 1000 + (logical as number) * intervalSec);
+        }
+        return null;
+      },
+      coordinateToLogical: (x: number) => timeScale.coordinateToLogical(x),
+      logicalToCoordinate: (l: any) => timeScale.logicalToCoordinate(l),
+      getVisibleLogicalRange: () => timeScale.getVisibleLogicalRange(),
+    };
+  }, [timeframe]);
+
+  /**
+   * Resilient series wrapper that supports blank charts without rendered bars.
+   */
+  const getSafeSeries = useCallback((seriesApi: any, containerHeight = 500) => {
+    return {
+      priceToCoordinate: (price: number): number | null => {
+        const direct = seriesApi.priceToCoordinate(price);
+        if (direct !== null) return direct;
+        if (containerHeight > 0) {
+          return containerHeight * (1 - Math.max(0, Math.min(100, price)) / 100);
+        }
+        return null;
+      },
+      coordinateToPrice: (y: number): number | null => {
+        const direct = seriesApi.coordinateToPrice(y);
+        if (direct !== null) return direct;
+        if (containerHeight > 0) {
+          return Math.max(0, 100 * (1 - y / containerHeight));
+        }
+        return null;
+      },
+    };
+  }, []);
 
   const getBarAndPrice = useCallback((e: MouseEvent): DrawingPoint | null => {
     if (!chart || !series || !containerRef.current) return null;
     const rect = containerRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const timeCoord = chart.timeScale().coordinateToTime(x);
-    const priceCoord = series.coordinateToPrice(y);
+
+    const safeTimeScale = getSafeTimeScale(chart.timeScale());
+    const safeSeries = getSafeSeries(series, rect.height);
+
+    const timeCoord = safeTimeScale.coordinateToTime(x);
+    const priceCoord = safeSeries.coordinateToPrice(y);
     if (timeCoord === null || priceCoord === null) return null;
-
-    if (magnetMode && visibleBars && visibleBars.length > 0) {
-      const targetTime = timeCoord as number;
-      let closestBar = visibleBars[0];
-      let minTimeDiff = Math.abs(visibleBars[0].time - targetTime);
-      for (let i = 1; i < visibleBars.length; i++) {
-        const diff = Math.abs(visibleBars[i].time - targetTime);
-        if (diff < minTimeDiff) {
-          minTimeDiff = diff;
-          closestBar = visibleBars[i];
-        }
-      }
-
-      const ohlc = [closestBar.open, closestBar.high, closestBar.low, closestBar.close];
-      let bestPrice = ohlc[0];
-      let minPriceDiff = Math.abs(ohlc[0] - priceCoord);
-      for (let j = 1; j < ohlc.length; j++) {
-        const pDiff = Math.abs(ohlc[j] - priceCoord);
-        if (pDiff < minPriceDiff) {
-          minPriceDiff = pDiff;
-          bestPrice = ohlc[j];
-        }
-      }
-
-      return { time: closestBar.time, price: bestPrice };
-    }
-
-    return { time: timeCoord as number, price: priceCoord };
-  }, [chart, series, containerRef, magnetMode, visibleBars]);
+    return { time: timeCoord, price: priceCoord };
+  }, [chart, series, containerRef, getSafeTimeScale, getSafeSeries]);
 
   const snapPrice = useCallback((price: number) => {
     if (price > 10) return Math.round(price * 100) / 100;
@@ -187,11 +274,25 @@ export function DrawingOverlay({
         const entryY = series.priceToCoordinate(d.entryPrice);
         const slY = d.stopLoss != null ? series.priceToCoordinate(d.stopLoss) : null;
         const tpY = d.takeProfit != null ? series.priceToCoordinate(d.takeProfit) : null;
-        const dists: number[] = [];
-        if (entryY !== null) dists.push(Math.abs(my - entryY));
-        if (slY !== null) dists.push(Math.abs(my - slY));
-        if (tpY !== null) dists.push(Math.abs(my - tpY));
-        if (dists.length > 0) dist = Math.min(...dists);
+        const x1 = d.points[0] ? timeScale.timeToCoordinate(d.points[0].time as any) : null;
+        const boxWidth = 280;
+        const leftX = x1 !== null ? x1 - 30 : 0;
+        const rightX = x1 !== null ? x1 + boxWidth + 50 : 3000;
+
+        if (mx >= leftX && mx <= rightX) {
+          const dists: number[] = [];
+          if (entryY !== null) dists.push(Math.abs(my - entryY));
+          if (slY !== null) dists.push(Math.abs(my - slY));
+          if (tpY !== null) dists.push(Math.abs(my - tpY));
+          if (dists.length > 0) dist = Math.min(...dists);
+
+          const allYs = ([entryY, slY, tpY].filter((y) => y !== null) as unknown[]) as number[];
+          if (allYs.length > 0) {
+            const minY = Math.min(...allYs);
+            const maxY = Math.max(...allYs);
+            if (my >= minY - 8 && my <= maxY + 8) dist = 0;
+          }
+        }
       } else if (d.type === 'triangle' && d.points.length === 3) {
         // Hit test on edges of triangle
         for (let i = 0; i < 3; i++) {
@@ -231,11 +332,19 @@ export function DrawingOverlay({
       const tpY = d.takeProfit != null ? series.priceToCoordinate(d.takeProfit) : null;
       const x1 = d.points[0] ? timeScale.timeToCoordinate(d.points[0].time as any) : null;
       const boxWidth = 280;
+      const leftX = x1 !== null ? x1 - 30 : 0;
+      const rightX = x1 !== null ? x1 + boxWidth + 50 : 3000;
 
-      if (x1 !== null && mx >= x1 - 20 && mx <= x1 + boxWidth + 20) {
-        if (slY !== null && Math.abs(my - slY) <= 12) return 'sl';
-        if (tpY !== null && Math.abs(my - tpY) <= 12) return 'tp';
-        if (entryY !== null && Math.abs(my - entryY) <= 12) return 'entry';
+      if (mx >= leftX && mx <= rightX) {
+        if (slY !== null && Math.abs(my - slY) <= 18) return 'sl';
+        if (tpY !== null && Math.abs(my - tpY) <= 18) return 'tp';
+        if (entryY !== null && Math.abs(my - entryY) <= 14) return 'entry';
+        const allYs = ([entryY, slY, tpY].filter((y) => y !== null) as unknown[]) as number[];
+        if (allYs.length > 0) {
+          const minY = Math.min(...allYs);
+          const maxY = Math.max(...allYs);
+          if (my >= minY && my <= maxY) return 'body';
+        }
       }
     }
 
@@ -261,44 +370,85 @@ export function DrawingOverlay({
     return null;
   }, [chart, series]);
 
+  /** Snaps line angle to exact 0°, 45°, or 90° increments relative to anchor coordinate. */
+  const snapAngle45 = useCallback((
+    anchor: { x: number; y: number },
+    target: { x: number; y: number }
+  ): { x: number; y: number; isHorizontal: boolean; isVertical: boolean } => {
+    const dx = target.x - anchor.x;
+    const dy = target.y - anchor.y;
+    if (dx === 0 && dy === 0) return { x: target.x, y: target.y, isHorizontal: true, isVertical: false };
+    const theta = Math.atan2(dy, dx);
+    const step = Math.PI / 4;
+    const snappedAngle = Math.round(theta / step) * step;
+    const dist = Math.hypot(dx, dy);
+
+    const isHorizontal = Math.abs(Math.sin(snappedAngle)) < 0.001;
+    const isVertical = Math.abs(Math.cos(snappedAngle)) < 0.001;
+
+    const sx = isVertical ? anchor.x : anchor.x + dist * Math.cos(snappedAngle);
+    const sy = isHorizontal ? anchor.y : anchor.y + dist * Math.sin(snappedAngle);
+    return { x: sx, y: sy, isHorizontal, isVertical };
+  }, []);
+
   const computeToolbarPos = useCallback((drawing: Drawing) => {
-    if (!chart || !series) return null;
+    if (!chart || !series || !containerRef.current) return null;
     const timeScale = chart.timeScale();
+    const containerWidth = containerRef.current.clientWidth || 800;
+
+    let targetX = 80;
+    let targetY = 100;
+
     if (drawing.type === 'horizontal' && drawing.points[0]) {
       const y = series.priceToCoordinate(drawing.points[0].price);
-      return y !== null ? { x: 80, y: y - 44 } : null;
+      if (y === null) return null;
+      return { x: 80, y: y > 50 ? y - 44 : y + 16 };
     }
     if (drawing.type === 'vertical' && drawing.points[0]) {
       const x = timeScale.timeToCoordinate(drawing.points[0].time as any);
-      return x !== null ? { x: x - 100, y: 10 } : null;
+      if (x === null) return null;
+      return { x: Math.max(60, Math.min(x - 100, containerWidth - 280)), y: 16 };
     }
-    if (drawing.points.length >= 2) {
-      const x1 = timeScale.timeToCoordinate(drawing.points[0].time as any);
-      const y1 = series.priceToCoordinate(drawing.points[0].price);
-      if (x1 !== null && y1 !== null) return { x: Math.max(60, x1), y: y1 - 48 };
-    }
-    if (drawing.points.length === 1) {
-      const x1 = timeScale.timeToCoordinate(drawing.points[0].time as any);
-      const y1 = series.priceToCoordinate(drawing.points[0].price);
-      if (x1 !== null && y1 !== null) return { x: Math.max(60, x1), y: y1 - 48 };
-    }
+
     if ((drawing.type === 'position_long' || drawing.type === 'position_short') && drawing.entryPrice != null) {
-      const y = series.priceToCoordinate(drawing.entryPrice);
+      const entryY = series.priceToCoordinate(drawing.entryPrice);
+      const slY = drawing.stopLoss != null ? series.priceToCoordinate(drawing.stopLoss) : null;
+      const tpY = drawing.takeProfit != null ? series.priceToCoordinate(drawing.takeProfit) : null;
+      const allYs = ([entryY, slY, tpY].filter((y) => y !== null) as unknown[]) as number[];
+      const minY = allYs.length > 0 ? Math.min(...allYs) : (entryY ?? 100);
+      const maxY = allYs.length > 0 ? Math.max(...allYs) : (entryY ?? 100);
       const x1 = drawing.points[0] ? timeScale.timeToCoordinate(drawing.points[0].time as any) : 100;
-      return y !== null && x1 !== null ? { x: Math.max(60, x1), y: y - 48 } : null;
+      targetX = x1 !== null ? x1 : 100;
+      // Position cleanly above highest boundary if room, or below lowest boundary
+      targetY = minY > 50 ? minY - 44 : maxY + 16;
+      return { x: Math.max(60, Math.min(targetX, containerWidth - 280)), y: targetY };
     }
+
+    if (drawing.points && drawing.points.length > 0) {
+      const ys = (drawing.points.map(p => series.priceToCoordinate(p.price)).filter(y => y !== null) as unknown[]) as number[];
+      const xs = (drawing.points.map(p => timeScale.timeToCoordinate(p.time as any)).filter(x => x !== null) as unknown[]) as number[];
+      if (ys.length > 0 && xs.length > 0) {
+        const minY = Math.min(...ys);
+        const maxY = Math.max(...ys);
+        const minX = Math.min(...xs);
+        targetX = minX;
+        targetY = minY > 50 ? minY - 44 : maxY + 16;
+        return { x: Math.max(60, Math.min(targetX, containerWidth - 280)), y: targetY };
+      }
+    }
+
     return null;
-  }, [chart, series]);
+  }, [chart, series, containerRef]);
 
   // Click handler
   const handleClick = useCallback((e: MouseEvent) => {
     setContextMenu(null);
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
 
     if (!activeTool) {
-      if (!containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
       const hit = hitTestDrawing(mx, my);
       if (hit) {
         setSelectedDrawingId(hit.id);
@@ -328,15 +478,15 @@ export function DrawingOverlay({
         showLabel: true,
       };
       onDrawingsChange([...drawings, drawing]);
-      if (activeTool === 'text') {
-        setSelectedDrawingId(drawing.id);
-      }
+      setSelectedDrawingId(drawing.id);
+      onToolChange?.(null);
       pendingPointsRef.current = [];
     } else if (needed === 3) {
       const pts = [...pendingPointsRef.current, point];
       if (pts.length < 3) {
         pendingPointsRef.current = pts;
       } else {
+        let createdDrawing: Drawing | null = null;
         if (activeTool === 'position_long' || activeTool === 'position_short') {
           const entry = pts[0].price;
           const sl = pts[1].price;
@@ -344,7 +494,7 @@ export function DrawingOverlay({
           const risk = Math.abs(entry - sl);
           const reward = Math.abs(tp - entry);
           const rr = risk > 0 ? reward / risk : 0;
-          const drawing: Drawing = {
+          createdDrawing = {
             id: createDrawingId(),
             type: activeTool,
             points: pts,
@@ -357,9 +507,8 @@ export function DrawingOverlay({
             riskRewardRatio: rr,
             showLabel: true,
           };
-          onDrawingsChange([...drawings, drawing]);
         } else if (activeTool === 'triangle') {
-          const drawing: Drawing = {
+          createdDrawing = {
             id: createDrawingId(),
             type: activeTool,
             points: pts,
@@ -369,9 +518,8 @@ export function DrawingOverlay({
             fillOpacity: 0.1,
             showLabel: true,
           };
-          onDrawingsChange([...drawings, drawing]);
         } else if (activeTool === 'pitchfork') {
-          const drawing: Drawing = {
+          createdDrawing = {
             id: createDrawingId(),
             type: activeTool,
             points: pts,
@@ -380,9 +528,8 @@ export function DrawingOverlay({
             lineStyle: 'solid',
             showLabel: true,
           };
-          onDrawingsChange([...drawings, drawing]);
         } else if (activeTool === 'fib_extension') {
-          const drawing: Drawing = {
+          createdDrawing = {
             id: createDrawingId(),
             type: activeTool,
             points: pts,
@@ -392,7 +539,11 @@ export function DrawingOverlay({
             fibLevels: DEFAULT_FIB_EXT_LEVELS,
             showLabel: true,
           };
-          onDrawingsChange([...drawings, drawing]);
+        }
+        if (createdDrawing) {
+          onDrawingsChange([...drawings, createdDrawing]);
+          setSelectedDrawingId(createdDrawing.id);
+          onToolChange?.(null);
         }
         pendingPointsRef.current = [];
       }
@@ -400,10 +551,44 @@ export function DrawingOverlay({
       if (pendingPointsRef.current.length === 0) {
         pendingPointsRef.current = [point];
       } else {
+        const p0 = pendingPointsRef.current[0];
+        let p1 = point;
+
+        if (e.shiftKey && chart && series) {
+          const safeTimeScale = getSafeTimeScale(chart.timeScale());
+          const x0 = safeTimeScale.timeToCoordinate(p0.time as any);
+          const y0 = series.priceToCoordinate(p0.price);
+          if (x0 !== null && y0 !== null) {
+            if (activeTool === 'trendline' || activeTool === 'ray' || activeTool === 'extended_line' || activeTool === 'info_line') {
+              const snapped = snapAngle45({ x: x0, y: y0 }, { x: mx, y: my });
+              if (snapped.isHorizontal) {
+                p1 = { ...p1, price: p0.price };
+              } else if (snapped.isVertical) {
+                p1 = { ...p1, time: p0.time };
+              } else {
+                const pCoord = series.coordinateToPrice(snapped.y);
+                if (pCoord !== null) p1 = { ...p1, price: snapPrice(pCoord) };
+                const tCoord = safeTimeScale.coordinateToTime(snapped.x);
+                if (tCoord !== null) p1 = { ...p1, time: tCoord };
+              }
+            } else if (activeTool === 'rectangle') {
+              const maxDist = Math.max(Math.abs(mx - x0), Math.abs(my - y0));
+              const sx = x0 + Math.sign((mx - x0) || 1) * maxDist;
+              const sy = y0 + Math.sign((my - y0) || 1) * maxDist;
+              const pCoord = series.coordinateToPrice(sy);
+              const tCoord = safeTimeScale.coordinateToTime(sx);
+              p1 = {
+                time: tCoord ?? p1.time,
+                price: pCoord !== null ? snapPrice(pCoord) : p1.price,
+              };
+            }
+          }
+        }
+
         const drawing: Drawing = {
           id: createDrawingId(),
           type: activeTool,
-          points: [pendingPointsRef.current[0], point],
+          points: [p0, p1],
           color: DEFAULT_COLORS[activeTool],
           lineWidth: 2,
           lineStyle: 'solid',
@@ -412,10 +597,12 @@ export function DrawingOverlay({
           showLabel: true,
         };
         onDrawingsChange([...drawings, drawing]);
+        setSelectedDrawingId(drawing.id);
+        onToolChange?.(null);
         pendingPointsRef.current = [];
       }
     }
-  }, [activeTool, drawings, onDrawingsChange, getBarAndPrice, snapPrice, hitTestDrawing, containerRef]);
+  }, [activeTool, drawings, onDrawingsChange, getBarAndPrice, snapPrice, hitTestDrawing, containerRef, onToolChange, chart, series, getSafeTimeScale, snapAngle45]);
 
   // Mouse move
   const handleMouseMove = useCallback((e: MouseEvent) => {
@@ -428,37 +615,63 @@ export function DrawingOverlay({
     // Brush drawing
     if (isBrushing.current && activeTool === 'brush') {
       brushPointsRef.current.push({ x: mx, y: my });
+      renderFnRef.current?.();
       return;
     }
 
-    // Drag in progress
-    if (dragState) {
-      const timeCoord = chart.timeScale().coordinateToTime(mx);
+    // Order SL / TP drag in progress
+    if (orderDragState) {
       const priceCoord = series.coordinateToPrice(my);
-      if (timeCoord === null || priceCoord === null) return;
+      if (priceCoord !== null) {
+        const snapP = snapPrice(priceCoord);
+        setOrderDragState(prev => prev ? { ...prev, currentPrice: snapP } : null);
+        if (canvasRef.current) canvasRef.current.style.cursor = 'ns-resize';
+      }
+      return;
+    }
+
+    // Drawing drag in progress
+    if (dragState) {
+      const priceCoord = series.coordinateToPrice(my);
+      if (priceCoord === null) return;
+
+      const snapP = snapPrice(priceCoord);
+      const timeCoord = chart.timeScale().coordinateToTime(mx);
+      const timeSec = (timeCoord as number | null) ?? dragState.startCoord.time;
 
       const d = drawings.find(dd => dd.id === dragState.drawingId);
       if (!d) return;
 
-      const snapP = snapPrice(priceCoord);
-      const timeSec = timeCoord as number;
+      let updated: Drawing | null = null;
 
       if (dragState.anchor === 'body') {
+        let dt = timeCoord !== null ? timeSec - dragState.startCoord.time : 0;
+        let dp = snapP - dragState.startCoord.price;
+
+        // Shift constraint: lock translation strictly along single dominant axis
+        if (e.shiftKey) {
+          const mouseDx = mx - dragState.startMouse.x;
+          const mouseDy = my - dragState.startMouse.y;
+          if (Math.abs(mouseDx) >= Math.abs(mouseDy)) {
+            dp = 0; // Pure horizontal time-shift at constant price
+          } else {
+            dt = 0; // Pure vertical price-shift at constant time
+          }
+        }
+
         if (d.type === 'horizontal' && d.points[0]) {
-          const updated: Drawing = {
+          updated = {
             ...d,
             points: [{ ...d.points[0], price: snapP }],
           };
-          onDrawingsChange(drawings.map(dd => dd.id === d.id ? updated : dd));
         } else if (d.type === 'vertical' && d.points[0]) {
-          const updated: Drawing = {
-            ...d,
-            points: [{ ...d.points[0], time: timeSec }],
-          };
-          onDrawingsChange(drawings.map(dd => dd.id === d.id ? updated : dd));
+          if (timeCoord !== null) {
+            updated = {
+              ...d,
+              points: [{ ...d.points[0], time: timeSec }],
+            };
+          }
         } else if (d.type === 'position_long' || d.type === 'position_short') {
-          const dt = timeSec - dragState.startCoord.time;
-          const dp = snapP - dragState.startCoord.price;
           const newEntry = snapPrice((dragState.originalDrawing.entryPrice ?? d.points[0]?.price) + dp);
           const newSL = dragState.originalDrawing.stopLoss != null ? snapPrice(dragState.originalDrawing.stopLoss + dp) : undefined;
           const newTP = dragState.originalDrawing.takeProfit != null ? snapPrice(dragState.originalDrawing.takeProfit + dp) : undefined;
@@ -466,50 +679,85 @@ export function DrawingOverlay({
             time: p.time + dt,
             price: snapPrice(p.price + dp),
           }));
-          const updated: Drawing = {
+          updated = {
             ...d,
             entryPrice: newEntry,
             stopLoss: newSL,
             takeProfit: newTP,
             points: newPoints,
           };
-          onDrawingsChange(drawings.map(dd => dd.id === d.id ? updated : dd));
         } else {
-          const dt = timeSec - dragState.startCoord.time;
-          const dp = snapP - dragState.startCoord.price;
           const newPoints = dragState.originalPoints.map(p => ({
             time: p.time + dt,
             price: snapPrice(p.price + dp),
           }));
-          const updated: Drawing = { ...d, points: newPoints };
-          onDrawingsChange(drawings.map(dd => dd.id === d.id ? updated : dd));
+          updated = { ...d, points: newPoints };
         }
-      } else if (dragState.anchor === 'p0') {
+      } else if (dragState.anchor === 'p0' || dragState.anchor === 'p1') {
+        const isP0 = dragState.anchor === 'p0';
         const newPoints = [...d.points];
-        newPoints[0] = { time: timeSec, price: snapP };
-        const updated: Drawing = { ...d, points: newPoints };
-        if (d.type === 'position_long' || d.type === 'position_short') {
-          updated.entryPrice = snapP;
-          if (updated.stopLoss != null && updated.takeProfit != null) {
-            const risk = Math.abs(snapP - updated.stopLoss);
-            const reward = Math.abs(updated.takeProfit - snapP);
-            updated.riskRewardRatio = risk > 0 ? reward / risk : 0;
+        let pTarget = {
+          time: timeCoord !== null ? timeSec : (newPoints[isP0 ? 0 : 1]?.time ?? 0),
+          price: snapP,
+        };
+
+        // Shift constraint for line angle snapping (0°, 45°, 90°) or rectangle 1:1 aspect ratio
+        if (e.shiftKey) {
+          const otherIdx = isP0 ? 1 : 0;
+          const otherPt = d.points[otherIdx];
+          if (otherPt) {
+            const safeTimeScale = getSafeTimeScale(chart.timeScale());
+            const xOther = safeTimeScale.timeToCoordinate(otherPt.time as any);
+            const yOther = series.priceToCoordinate(otherPt.price);
+            if (xOther !== null && yOther !== null) {
+              if (d.type === 'trendline' || d.type === 'ray' || d.type === 'extended_line' || d.type === 'info_line') {
+                const snapped = snapAngle45({ x: xOther, y: yOther }, { x: mx, y: my });
+                if (snapped.isHorizontal) {
+                  pTarget.price = otherPt.price;
+                  pTarget.time = safeTimeScale.coordinateToTime(snapped.x) ?? pTarget.time;
+                } else if (snapped.isVertical) {
+                  pTarget.time = otherPt.time;
+                  const pCoord = series.coordinateToPrice(snapped.y);
+                  if (pCoord !== null) pTarget.price = snapPrice(pCoord);
+                } else {
+                  pTarget.time = safeTimeScale.coordinateToTime(snapped.x) ?? pTarget.time;
+                  const pCoord = series.coordinateToPrice(snapped.y);
+                  if (pCoord !== null) pTarget.price = snapPrice(pCoord);
+                }
+              } else if (d.type === 'rectangle') {
+                const maxDist = Math.max(Math.abs(mx - xOther), Math.abs(my - yOther));
+                const sx = xOther + Math.sign((mx - xOther) || 1) * maxDist;
+                const sy = yOther + Math.sign((my - yOther) || 1) * maxDist;
+                pTarget.time = safeTimeScale.coordinateToTime(sx) ?? pTarget.time;
+                const pCoord = series.coordinateToPrice(sy);
+                if (pCoord !== null) pTarget.price = snapPrice(pCoord);
+              }
+            }
           }
         }
-        onDrawingsChange(drawings.map(dd => dd.id === d.id ? updated : dd));
-      } else if (dragState.anchor === 'p1') {
-        const newPoints = [...d.points];
-        if (newPoints.length > 1) {
-          newPoints[1] = { time: timeSec, price: snapP };
-          const updated: Drawing = { ...d, points: newPoints };
-          onDrawingsChange(drawings.map(dd => dd.id === d.id ? updated : dd));
+
+        if (isP0) {
+          newPoints[0] = pTarget;
+          updated = { ...d, points: newPoints };
+          if (d.type === 'position_long' || d.type === 'position_short') {
+            updated.entryPrice = pTarget.price;
+            if (updated.stopLoss != null && updated.takeProfit != null) {
+              const risk = Math.abs(pTarget.price - updated.stopLoss);
+              const reward = Math.abs(updated.takeProfit - pTarget.price);
+              updated.riskRewardRatio = risk > 0 ? reward / risk : 0;
+            }
+          }
+        } else {
+          if (newPoints.length > 1) {
+            newPoints[1] = pTarget;
+            updated = { ...d, points: newPoints };
+          }
         }
       } else if (dragState.anchor === 'p2') {
         const newPoints = [...d.points];
         if (newPoints.length > 2) {
-          newPoints[2] = { time: timeSec, price: snapP };
-          const updated: Drawing = { ...d, points: newPoints };
-          onDrawingsChange(drawings.map(dd => dd.id === d.id ? updated : dd));
+          newPoints[2] = { time: timeCoord !== null ? timeSec : (newPoints[2]?.time ?? 0), price: snapP };
+          updated = { ...d, points: newPoints };
         }
       } else if (dragState.anchor === 'sl') {
         const entry = d.entryPrice ?? d.points[0]?.price ?? snapP;
@@ -519,13 +767,12 @@ export function DrawingOverlay({
         const rr = risk > 0 ? reward / risk : 0;
         const newPoints = [...d.points];
         if (newPoints[1]) newPoints[1] = { ...newPoints[1], price: snapP };
-        const updated: Drawing = {
+        updated = {
           ...d,
           stopLoss: snapP,
           riskRewardRatio: rr,
           points: newPoints,
         };
-        onDrawingsChange(drawings.map(dd => dd.id === d.id ? updated : dd));
       } else if (dragState.anchor === 'tp') {
         const entry = d.entryPrice ?? d.points[0]?.price ?? snapP;
         const sl = d.stopLoss ?? (d.points[1]?.price ?? entry);
@@ -534,13 +781,12 @@ export function DrawingOverlay({
         const rr = risk > 0 ? reward / risk : 0;
         const newPoints = [...d.points];
         if (newPoints[2]) newPoints[2] = { ...newPoints[2], price: snapP };
-        const updated: Drawing = {
+        updated = {
           ...d,
           takeProfit: snapP,
           riskRewardRatio: rr,
           points: newPoints,
         };
-        onDrawingsChange(drawings.map(dd => dd.id === d.id ? updated : dd));
       } else if (dragState.anchor === 'entry') {
         const oldEntry = d.entryPrice ?? snapP;
         const diff = snapP - oldEntry;
@@ -550,39 +796,81 @@ export function DrawingOverlay({
         if (newPoints[0]) newPoints[0] = { ...newPoints[0], price: snapP };
         if (newPoints[1] && newSL != null) newPoints[1] = { ...newPoints[1], price: newSL };
         if (newPoints[2] && newTP != null) newPoints[2] = { ...newPoints[2], price: newTP };
-        const updated: Drawing = {
+        updated = {
           ...d,
           entryPrice: snapP,
           stopLoss: newSL,
           takeProfit: newTP,
           points: newPoints,
         };
-        onDrawingsChange(drawings.map(dd => dd.id === d.id ? updated : dd));
+      }
+
+      if (updated) {
+        previewDrawingRef.current = updated;
+        renderFnRef.current?.();
       }
       return;
     }
 
     if (!activeTool && canvasRef.current) {
-      if (selectedDrawing) {
-        const anchor = findAnchorHit(mx, my, selectedDrawing);
-        if (anchor === 'p0' || anchor === 'p1' || anchor === 'p2') {
-          canvasRef.current.style.cursor = 'crosshair';
-        } else if (anchor === 'sl' || anchor === 'tp' || anchor === 'entry') {
-          canvasRef.current.style.cursor = 'ns-resize';
-        } else if (anchor === 'body') {
-          canvasRef.current.style.cursor = 'grab';
+      // Check live order SL/TP hover
+      let hitOrderLevel = false;
+      if (orders && orders.length > 0) {
+        for (const o of orders) {
+          if (o.status !== 'filled' && o.status !== 'pending') continue;
+          if (o.stopLoss != null) {
+            const slY = series.priceToCoordinate(o.stopLoss);
+            if (slY !== null && Math.abs(my - slY) <= 16) {
+              canvasRef.current.style.cursor = 'ns-resize';
+              hitOrderLevel = true;
+              break;
+            }
+          }
+          if (o.takeProfit != null) {
+            const tpY = series.priceToCoordinate(o.takeProfit);
+            if (tpY !== null && Math.abs(my - tpY) <= 16) {
+              canvasRef.current.style.cursor = 'ns-resize';
+              hitOrderLevel = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!hitOrderLevel) {
+        if (selectedDrawing) {
+          const anchor = findAnchorHit(mx, my, selectedDrawing);
+          if (anchor === 'p0' || anchor === 'p1' || anchor === 'p2') {
+            canvasRef.current.style.cursor = 'crosshair';
+          } else if (anchor === 'sl' || anchor === 'tp' || anchor === 'entry') {
+            canvasRef.current.style.cursor = 'ns-resize';
+          } else if (anchor === 'body') {
+            canvasRef.current.style.cursor = 'grab';
+          } else {
+            const hit = hitTestDrawing(mx, my);
+            canvasRef.current.style.cursor = hit ? 'grab' : 'default';
+            setHoveredDrawingId(hit?.id || null);
+          }
         } else {
           const hit = hitTestDrawing(mx, my);
-          canvasRef.current.style.cursor = hit ? 'grab' : 'default';
+          if (hit) {
+            const anchor = findAnchorHit(mx, my, hit);
+            if (anchor === 'sl' || anchor === 'tp' || anchor === 'entry') {
+              canvasRef.current.style.cursor = 'ns-resize';
+            } else {
+              canvasRef.current.style.cursor = 'grab';
+            }
+          } else {
+            canvasRef.current.style.cursor = 'default';
+          }
           setHoveredDrawingId(hit?.id || null);
         }
-      } else {
-        const hit = hitTestDrawing(mx, my);
-        canvasRef.current.style.cursor = hit ? 'grab' : 'default';
-        setHoveredDrawingId(hit?.id || null);
       }
     }
-  }, [containerRef, chart, series, activeTool, dragState, drawings, snapPrice, onDrawingsChange, selectedDrawing, findAnchorHit, hitTestDrawing]);
+    if (activeTool) {
+      renderFnRef.current?.();
+    }
+  }, [containerRef, chart, series, activeTool, dragState, orderDragState, drawings, snapPrice, onDrawingsChange, selectedDrawing, findAnchorHit, hitTestDrawing, orders]);
 
   // Mouse down - start drag or brush
   const handleMouseDown = useCallback((e: MouseEvent) => {
@@ -599,21 +887,75 @@ export function DrawingOverlay({
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
 
-    const timeCoord = chart.timeScale().coordinateToTime(mx);
     const priceCoord = series.coordinateToPrice(my);
-    if (timeCoord === null || priceCoord === null) return;
+    if (priceCoord === null) return;
+    const timeCoord = chart.timeScale().coordinateToTime(mx);
+    const timeSec = (timeCoord as number | null) ?? 0;
 
-    // Check currently selected drawing first
+    // 1. Check active live orders SL and TP drag
+    if (orders && orders.length > 0) {
+      for (const o of orders) {
+        if (o.status !== 'filled' && o.status !== 'pending') continue;
+        const entry = o.fillPrice ?? o.limitPrice;
+        if (!entry) continue;
+
+        // Check SL
+        if (o.stopLoss != null) {
+          const slY = series.priceToCoordinate(o.stopLoss);
+          if (slY !== null && Math.abs(my - slY) <= 16) {
+            e.preventDefault();
+            e.stopPropagation();
+            isDraggingRef.current = true;
+            chart.applyOptions({ handleScroll: false, handleScale: false });
+            setOrderDragState({
+              orderId: o.id,
+              type: 'sl',
+              startPrice: o.stopLoss,
+              currentPrice: o.stopLoss,
+              side: o.side,
+              entryPrice: entry,
+              size: o.size,
+            });
+            return;
+          }
+        }
+
+        // Check TP
+        if (o.takeProfit != null) {
+          const tpY = series.priceToCoordinate(o.takeProfit);
+          if (tpY !== null && Math.abs(my - tpY) <= 16) {
+            e.preventDefault();
+            e.stopPropagation();
+            isDraggingRef.current = true;
+            chart.applyOptions({ handleScroll: false, handleScale: false });
+            setOrderDragState({
+              orderId: o.id,
+              type: 'tp',
+              startPrice: o.takeProfit,
+              currentPrice: o.takeProfit,
+              side: o.side,
+              entryPrice: entry,
+              size: o.size,
+            });
+            return;
+          }
+        }
+      }
+    }
+
+    // 2. Check currently selected drawing first
     if (selectedDrawing && !selectedDrawing.locked && selectedDrawing.visible !== false) {
       const anchor = findAnchorHit(mx, my, selectedDrawing);
       if (anchor) {
         e.preventDefault();
         e.stopPropagation();
+        isDraggingRef.current = true;
+        chart.applyOptions({ handleScroll: false, handleScale: false });
         setDragState({
           drawingId: selectedDrawing.id,
           anchor,
           startMouse: { x: mx, y: my },
-          startCoord: { time: timeCoord as number, price: snapPrice(priceCoord) },
+          startCoord: { time: timeSec || (selectedDrawing.points[0]?.time ?? 0), price: snapPrice(priceCoord) },
           originalPoints: selectedDrawing.points.map(p => ({ ...p })),
           originalDrawing: { ...selectedDrawing },
         });
@@ -621,26 +963,52 @@ export function DrawingOverlay({
       }
     }
 
-    // Check hit against any drawing
+    // 3. Check hit against any drawing
     const hit = hitTestDrawing(mx, my);
     if (hit && !hit.locked && hit.visible !== false) {
       e.preventDefault();
       e.stopPropagation();
       setSelectedDrawingId(hit.id);
+      isDraggingRef.current = true;
+      chart.applyOptions({ handleScroll: false, handleScale: false });
 
       const anchor = findAnchorHit(mx, my, hit) || 'body';
       setDragState({
         drawingId: hit.id,
         anchor,
         startMouse: { x: mx, y: my },
-        startCoord: { time: timeCoord as number, price: snapPrice(priceCoord) },
+        startCoord: { time: timeSec || (hit.points[0]?.time ?? 0), price: snapPrice(priceCoord) },
         originalPoints: hit.points.map(p => ({ ...p })),
         originalDrawing: { ...hit },
       });
     }
-  }, [activeTool, containerRef, chart, series, selectedDrawing, findAnchorHit, hitTestDrawing, snapPrice]);
+  }, [activeTool, containerRef, chart, series, selectedDrawing, findAnchorHit, hitTestDrawing, snapPrice, orders]);
 
   const handleMouseUp = useCallback(() => {
+    if (isDraggingRef.current) {
+      isDraggingRef.current = false;
+      chart?.applyOptions({ handleScroll: true, handleScale: true });
+    }
+
+    if (orderDragState) {
+      if (orderDragState.currentPrice !== orderDragState.startPrice) {
+        if (orderDragState.type === 'sl') {
+          onUpdateOrder?.(orderDragState.orderId, { stopLoss: orderDragState.currentPrice });
+        } else if (orderDragState.type === 'tp') {
+          onUpdateOrder?.(orderDragState.orderId, { takeProfit: orderDragState.currentPrice });
+        }
+      }
+      setOrderDragState(null);
+      if (canvasRef.current) canvasRef.current.style.cursor = 'default';
+    }
+
+    if (previewDrawingRef.current) {
+      const finalDrawing = previewDrawingRef.current;
+      undoStackRef.current.push(structuredClone(drawings));
+      onDrawingsChange(drawings.map(dd => dd.id === finalDrawing.id ? finalDrawing : dd));
+      previewDrawingRef.current = null;
+    }
+
     if (dragState) {
       setDragState(null);
       if (canvasRef.current) canvasRef.current.style.cursor = 'default';
@@ -657,11 +1025,13 @@ export function DrawingOverlay({
         lineStyle: 'solid',
         brushPoints: [...brushPointsRef.current],
       };
+      undoStackRef.current.push(structuredClone(drawings));
       onDrawingsChange([...drawings, drawing]);
+      onToolChange?.(null);
     }
     isBrushing.current = false;
     brushPointsRef.current = [];
-  }, [dragState, activeTool, drawings, onDrawingsChange]);
+  }, [orderDragState, dragState, activeTool, drawings, onDrawingsChange, onUpdateOrder, onToolChange]);
 
   // Right-click context menu
   const handleContextMenu = useCallback((e: MouseEvent) => {
@@ -670,7 +1040,12 @@ export function DrawingOverlay({
       pendingPointsRef.current = [];
       return;
     }
-    if (!containerRef.current || activeTool) return;
+    if (activeTool) {
+      e.preventDefault();
+      onToolChange?.(null);
+      return;
+    }
+    if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
@@ -680,27 +1055,43 @@ export function DrawingOverlay({
       setSelectedDrawingId(hit.id);
       setContextMenu({ x: mx, y: my, drawingId: hit.id });
     }
-  }, [activeTool, hitTestDrawing, containerRef]);
+  }, [activeTool, hitTestDrawing, containerRef, onToolChange]);
 
   // Keyboard: Delete/Backspace
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === 'Escape') {
+        if (activeTool) onToolChange?.(null);
+        pendingPointsRef.current = [];
+        setSelectedDrawingId(null);
+        setContextMenu(null);
+      }
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedDrawingId) {
         e.preventDefault();
+        undoStackRef.current.push(structuredClone(drawings));
         onDrawingsChange(drawings.filter(d => d.id !== selectedDrawingId));
         setSelectedDrawingId(null);
         setToolbarPos(null);
       }
-      // Ctrl+Z undo last drawing
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && drawings.length > 0) {
+      // Ctrl+Z / Cmd+Z undo last drawing action
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
         e.preventDefault();
-        onDrawingsChange(drawings.slice(0, -1));
+        const prev = undoStackRef.current.pop();
+        if (prev) {
+          onDrawingsChange(prev);
+          setSelectedDrawingId(null);
+          setToolbarPos(null);
+        } else if (drawings.length > 0) {
+          onDrawingsChange(drawings.slice(0, -1));
+          setSelectedDrawingId(null);
+          setToolbarPos(null);
+        }
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [selectedDrawingId, drawings, onDrawingsChange]);
+  }, [selectedDrawingId, drawings, onDrawingsChange, activeTool, onToolChange]);
 
   useEffect(() => {
     pendingPointsRef.current = [];
@@ -711,17 +1102,53 @@ export function DrawingOverlay({
     if (!el) return;
     el.addEventListener('click', handleClick);
     el.addEventListener('mousemove', handleMouseMove);
-    el.addEventListener('mousedown', handleMouseDown);
+    el.addEventListener('pointermove', handleMouseMove as any);
+    el.addEventListener('mousedown', handleMouseDown, { capture: true });
+    el.addEventListener('pointerdown', handleMouseDown as any, { capture: true });
     el.addEventListener('mouseup', handleMouseUp);
+    el.addEventListener('pointerup', handleMouseUp as any);
+    el.addEventListener('pointercancel', handleMouseUp as any);
     el.addEventListener('contextmenu', handleContextMenu);
     return () => {
       el.removeEventListener('click', handleClick);
       el.removeEventListener('mousemove', handleMouseMove);
-      el.removeEventListener('mousedown', handleMouseDown);
+      el.removeEventListener('pointermove', handleMouseMove as any);
+      el.removeEventListener('mousedown', handleMouseDown, { capture: true });
+      el.removeEventListener('pointerdown', handleMouseDown as any, { capture: true });
       el.removeEventListener('mouseup', handleMouseUp);
+      el.removeEventListener('pointerup', handleMouseUp as any);
+      el.removeEventListener('pointercancel', handleMouseUp as any);
       el.removeEventListener('contextmenu', handleContextMenu);
     };
   }, [handleClick, handleMouseMove, handleMouseDown, handleMouseUp, handleContextMenu, containerRef]);
+
+  // Window drag isolation: prevents mouse gestures from panning/zooming the chart while dragging
+  useEffect(() => {
+    if (!dragState && !orderDragState) return;
+
+    const onWindowMove = (e: MouseEvent) => {
+      e.stopPropagation();
+      handleMouseMove(e);
+    };
+    const onWindowUp = (e: MouseEvent) => {
+      e.stopPropagation();
+      handleMouseUp();
+    };
+
+    window.addEventListener('mousemove', onWindowMove, { capture: true });
+    window.addEventListener('pointermove', onWindowMove as any, { capture: true });
+    window.addEventListener('mouseup', onWindowUp, { capture: true });
+    window.addEventListener('pointerup', onWindowUp as any, { capture: true });
+    window.addEventListener('pointercancel', onWindowUp as any, { capture: true });
+
+    return () => {
+      window.removeEventListener('mousemove', onWindowMove, { capture: true });
+      window.removeEventListener('pointermove', onWindowMove as any, { capture: true });
+      window.removeEventListener('mouseup', onWindowUp, { capture: true });
+      window.removeEventListener('pointerup', onWindowUp as any, { capture: true });
+      window.removeEventListener('pointercancel', onWindowUp as any, { capture: true });
+    };
+  }, [dragState, orderDragState, handleMouseMove, handleMouseUp]);
 
   // Update toolbar position
   useEffect(() => {
@@ -738,14 +1165,44 @@ export function DrawingOverlay({
     if (!chart || !series || !canvasRef.current || !containerRef.current) return;
     const canvas = canvasRef.current;
     const container = containerRef.current;
-    const dpr = window.devicePixelRatio || 1;
+    let rafId: number | null = null;
+
+    // Fast resize observer that only resets canvas bitmap when physical layout dimensions change
+    const updateCanvasSize = (w: number, h: number) => {
+      const dpr = window.devicePixelRatio || 1;
+      if (w <= 0 || h <= 0) return;
+      if (boundsRef.current.width !== w || boundsRef.current.height !== h || boundsRef.current.dpr !== dpr) {
+        boundsRef.current = { width: w, height: h, dpr };
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
+      }
+    };
+
+    const initialRect = container.getBoundingClientRect();
+    updateCanvasSize(initialRect.width, initialRect.height);
+
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          updateCanvasSize(width, height);
+          scheduleRender();
+        }
+      }
+    });
+    ro.observe(container);
+    const handleWindowResize = () => {
+      const rect = container.getBoundingClientRect();
+      updateCanvasSize(rect.width, rect.height);
+      scheduleRender();
+    };
+    window.addEventListener('resize', handleWindowResize);
 
     const render = () => {
-      const { width, height } = container.getBoundingClientRect();
-      canvas.width = width * dpr;
-      canvas.height = height * dpr;
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
+      const { width, height, dpr } = boundsRef.current;
+      if (width <= 0 || height <= 0) return;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -753,7 +1210,10 @@ export function DrawingOverlay({
       if (hideAllDrawings) return;
       const timeScale = chart.timeScale();
 
-      for (const drawing of drawings) {
+      for (const rawDrawing of drawings) {
+        const drawing = (previewDrawingRef.current && previewDrawingRef.current.id === rawDrawing.id)
+          ? previewDrawingRef.current
+          : rawDrawing;
         if (drawing.visible === false) continue;
         const isSelected = drawing.id === selectedDrawingId;
         const isHovered = drawing.id === hoveredDrawingId;
@@ -819,6 +1279,109 @@ export function DrawingOverlay({
         ctx.setLineDash([]);
       }
 
+      // Live order draggable badges & ghost lines
+      if (orders && orders.length > 0) {
+        for (const o of orders) {
+          if (o.status !== 'filled' && o.status !== 'pending') continue;
+          const entry = o.fillPrice ?? o.limitPrice;
+          if (!entry) continue;
+
+          const isDraggingSL = orderDragState?.orderId === o.id && orderDragState.type === 'sl';
+          const isDraggingTP = orderDragState?.orderId === o.id && orderDragState.type === 'tp';
+
+          const activeSL = isDraggingSL ? orderDragState.currentPrice : o.stopLoss;
+          const activeTP = isDraggingTP ? orderDragState.currentPrice : o.takeProfit;
+
+          // Render SL Draggable Badge
+          if (activeSL != null) {
+            const slY = series.priceToCoordinate(activeSL);
+            if (slY !== null) {
+              const badgeW = 96;
+              const badgeH = 20;
+              const badgeX = width - badgeW - 65;
+              ctx.save();
+              ctx.fillStyle = isDraggingSL ? '#e05347' : '#1e1412e6';
+              ctx.strokeStyle = '#e05347';
+              ctx.lineWidth = isDraggingSL ? 2 : 1.5;
+              ctx.beginPath();
+              ctx.roundRect(badgeX, slY - badgeH / 2, badgeW, badgeH, 4);
+              ctx.fill();
+              ctx.stroke();
+
+              ctx.font = 'bold 9px JetBrains Mono, monospace';
+              ctx.fillStyle = isDraggingSL ? '#ffffff' : '#e05347';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(`SL ${activeSL.toFixed(activeSL > 10 ? 2 : 4)} ↕`, badgeX + badgeW / 2, slY);
+
+              // Projected loss / pips tag
+              const diff = o.side === 'buy' ? activeSL - entry : entry - activeSL;
+              const pips = diff * (entry > 10 ? 100 : 10000);
+              const estLoss = diff * o.size * (entry > 10 ? 1 : 100000);
+              const infoText = `${pips.toFixed(0)}p ($${estLoss.toFixed(2)})`;
+
+              if (isDraggingSL) {
+                ctx.setLineDash([4, 4]);
+                ctx.strokeStyle = '#e05347';
+                ctx.beginPath(); ctx.moveTo(0, slY); ctx.lineTo(width, slY); ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.fillStyle = '#ff7b72';
+                ctx.fillText(infoText, badgeX - 52, slY);
+              } else {
+                ctx.font = '8px JetBrains Mono, monospace';
+                ctx.fillStyle = '#e05347a0';
+                ctx.fillText(infoText, badgeX - 44, slY);
+              }
+              ctx.restore();
+            }
+          }
+
+          // Render TP Draggable Badge
+          if (activeTP != null) {
+            const tpY = series.priceToCoordinate(activeTP);
+            if (tpY !== null) {
+              const badgeW = 96;
+              const badgeH = 20;
+              const badgeX = width - badgeW - 65;
+              ctx.save();
+              ctx.fillStyle = isDraggingTP ? '#4caf50' : '#121e14e6';
+              ctx.strokeStyle = '#4caf50';
+              ctx.lineWidth = isDraggingTP ? 2 : 1.5;
+              ctx.beginPath();
+              ctx.roundRect(badgeX, tpY - badgeH / 2, badgeW, badgeH, 4);
+              ctx.fill();
+              ctx.stroke();
+
+              ctx.font = 'bold 9px JetBrains Mono, monospace';
+              ctx.fillStyle = isDraggingTP ? '#ffffff' : '#4caf50';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(`TP ${activeTP.toFixed(activeTP > 10 ? 2 : 4)} ↕`, badgeX + badgeW / 2, tpY);
+
+              // Projected profit / pips tag
+              const diff = o.side === 'buy' ? activeTP - entry : entry - activeTP;
+              const pips = diff * (entry > 10 ? 100 : 10000);
+              const estGain = diff * o.size * (entry > 10 ? 1 : 100000);
+              const infoText = `+${pips.toFixed(0)}p (+$${estGain.toFixed(2)})`;
+
+              if (isDraggingTP) {
+                ctx.setLineDash([4, 4]);
+                ctx.strokeStyle = '#4caf50';
+                ctx.beginPath(); ctx.moveTo(0, tpY); ctx.lineTo(width, tpY); ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.fillStyle = '#7ee787';
+                ctx.fillText(infoText, badgeX - 52, tpY);
+              } else {
+                ctx.font = '8px JetBrains Mono, monospace';
+                ctx.fillStyle = '#4caf50a0';
+                ctx.fillText(infoText, badgeX - 44, tpY);
+              }
+              ctx.restore();
+            }
+          }
+        }
+      }
+
       // Brush in progress
       if (isBrushing.current && brushPointsRef.current.length > 1) {
         ctx.strokeStyle = DEFAULT_COLORS.brush;
@@ -836,11 +1399,25 @@ export function DrawingOverlay({
       renderPendingPreview(ctx, series, timeScale, width, height);
     };
 
-    render();
-    chart.timeScale().subscribeVisibleLogicalRangeChange(render);
-    const interval = setInterval(render, 60);
-    return () => { clearInterval(interval); };
-  }, [chart, series, drawings, activeTool, containerRef, selectedDrawingId, hoveredDrawingId, snapPrice]);
+    const scheduleRender = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        render();
+      });
+    };
+
+    renderFnRef.current = scheduleRender;
+    scheduleRender();
+    chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleRender);
+
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(scheduleRender);
+      ro.disconnect();
+      window.removeEventListener('resize', handleWindowResize);
+    };
+  }, [chart, series, drawings, activeTool, containerRef, selectedDrawingId, hoveredDrawingId, snapPrice, orders, orderDragState]);
 
   // --- Render helpers ---
 
@@ -997,11 +1574,30 @@ export function DrawingOverlay({
     ctx.fillRect(rx, ry, rw, rh);
     ctx.globalAlpha = d.opacity ?? 1;
     ctx.strokeRect(rx, ry, rw, rh);
+
+    // Permanent 50% middle equilibrium line
+    const midY = ry + rh / 2;
+    ctx.save();
+    ctx.strokeStyle = d.color;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(rx, midY);
+    ctx.lineTo(rx + rw, midY);
+    ctx.stroke();
+    // 50% / Equilibrium label
+    ctx.font = '9px JetBrains Mono, monospace';
+    ctx.fillStyle = d.color;
+    ctx.globalAlpha = (d.opacity ?? 1) * 0.85;
+    ctx.fillText('0.5', rx + 4, midY - 3);
+    ctx.restore();
+
     if (isSelected) {
       drawAnchor(ctx, x1, y1, d.color, true);
       drawAnchor(ctx, x2, y2, d.color, true);
       drawAnchor(ctx, x1, y2, d.color, true);
       drawAnchor(ctx, x2, y1, d.color, true);
+      drawAnchor(ctx, rx + rw / 2, midY, d.color, true);
     }
   }
 
@@ -1277,6 +1873,32 @@ export function DrawingOverlay({
     ctx.fillStyle = NUBIAN_SHORT + '80';
     ctx.fillText(`-${(risk * 10000).toFixed(0)}p`, x1 + boxWidth + 4, (entryY + slY) / 2 + 3);
 
+    // Draggable Level Grab Handles
+    const drawLevelHandle = (px: number, py: number, color: string, label: string, isDraggingThis: boolean) => {
+      ctx.save();
+      ctx.fillStyle = isDraggingThis ? color : '#14100ce6';
+      ctx.strokeStyle = color;
+      ctx.lineWidth = isDraggingThis ? 2 : 1.5;
+      ctx.beginPath();
+      ctx.roundRect(px - 24, py - 9, 48, 18, 4);
+      ctx.fill();
+      ctx.stroke();
+      ctx.font = 'bold 9px JetBrains Mono, monospace';
+      ctx.fillStyle = isDraggingThis ? '#ffffff' : color;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, px, py);
+      ctx.restore();
+    };
+
+    const isDraggingSL = dragState?.drawingId === d.id && dragState.anchor === 'sl';
+    const isDraggingTP = dragState?.drawingId === d.id && dragState.anchor === 'tp';
+    const isDraggingEntry = dragState?.drawingId === d.id && dragState.anchor === 'entry';
+
+    drawLevelHandle(x1 + boxWidth / 2, slY, NUBIAN_SHORT, 'SL ↕', isDraggingSL);
+    drawLevelHandle(x1 + boxWidth / 2, tpY, NUBIAN_LONG, 'TP ↕', isDraggingTP);
+    drawLevelHandle(x1 + boxWidth / 2, entryY, NUBIAN_GOLD, 'MOVE ✢', isDraggingEntry);
+
     if (isSelected) {
       drawAnchor(ctx, x1, entryY, NUBIAN_GOLD, true);
       drawAnchor(ctx, x1 + boxWidth, entryY, NUBIAN_GOLD, true);
@@ -1466,13 +2088,38 @@ export function DrawingOverlay({
         const y1 = series.priceToCoordinate(pts[0].price);
         if (x1 !== null && y1 !== null) {
           ctx.beginPath();
+          let targetX = mouseRef.current.x;
+          let targetY = mouseRef.current.y;
+
+          if (isShiftHeldRef.current && (activeTool === 'trendline' || activeTool === 'ray' || activeTool === 'extended_line' || activeTool === 'info_line')) {
+            const snapped = snapAngle45({ x: x1, y: y1 }, { x: targetX, y: targetY });
+            targetX = snapped.x;
+            targetY = snapped.y;
+          } else if (isShiftHeldRef.current && activeTool === 'rectangle') {
+            const maxDist = Math.max(Math.abs(targetX - x1), Math.abs(targetY - y1));
+            targetX = x1 + Math.sign((targetX - x1) || 1) * maxDist;
+            targetY = y1 + Math.sign((targetY - y1) || 1) * maxDist;
+          }
+
           if (activeTool === 'rectangle' || activeTool === 'ellipse' || activeTool === 'price_range') {
-            const rx = Math.min(x1, mouseRef.current.x);
-            const ry = Math.min(y1, mouseRef.current.y);
-            ctx.strokeRect(rx, ry, Math.abs(mouseRef.current.x - x1), Math.abs(mouseRef.current.y - y1));
+            const rx = Math.min(x1, targetX);
+            const ry = Math.min(y1, targetY);
+            const rw = Math.abs(targetX - x1);
+            const rh = Math.abs(targetY - y1);
+            ctx.strokeRect(rx, ry, rw, rh);
+            if (activeTool === 'rectangle') {
+              const midY = ry + rh / 2;
+              ctx.save();
+              ctx.setLineDash([4, 3]);
+              ctx.beginPath();
+              ctx.moveTo(rx, midY);
+              ctx.lineTo(rx + rw, midY);
+              ctx.stroke();
+              ctx.restore();
+            }
           } else {
             ctx.moveTo(x1, y1);
-            ctx.lineTo(mouseRef.current.x, mouseRef.current.y);
+            ctx.lineTo(targetX, targetY);
             ctx.stroke();
           }
           // For 3-click tools with 1 or 2 points placed

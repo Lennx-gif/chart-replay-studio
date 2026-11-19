@@ -1,8 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap');
-
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.ts";
 
 @layer base {
   :root {
@@ -75,6 +73,21 @@
   body {
     @apply bg-background text-foreground;
     font-family: 'Outfit', sans-serif;
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
+
+  html {
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
   }
 
   .font-mono {
@@ -100,10 +113,10 @@
 
 @layer components {
   .toolbar-btn {
-    @apply flex items-center justify-center px-2.5 py-1.5 rounded text-xs font-medium
+    @apply flex items-center justify-center px-2.5 h-7 rounded text-xs font-medium
            bg-secondary text-secondary-foreground border border-border
            hover:bg-accent hover:text-accent-foreground
-           transition-all duration-150 cursor-pointer select-none;
+           transition-all duration-150 cursor-pointer select-none leading-none;
   }
 
   .toolbar-btn-active {

@@ -9,59 +9,28 @@ export interface OHLCVBar {
   volume: number;
 }
 
-export function parseTimestampToSeconds(dateStr: string, timeStr?: string): number | null {
-  if (!dateStr) return null;
-  const trimmedDate = String(dateStr).trim();
-  const trimmedTime = timeStr ? String(timeStr).trim() : '';
-
-  // 1. Numeric unix timestamp (seconds or milliseconds)
-  const num = Number(trimmedDate);
-  if (!isNaN(num) && num > 0 && !trimmedDate.includes('-') && !trimmedDate.includes('/') && !trimmedDate.includes('.')) {
-    if (num > 1e11) {
-      return Math.floor(num / 1000);
-    }
-    if (num > 1e8) {
-      return Math.floor(num);
-    }
+/**
+ * Parse a CSV timestamp to unix seconds. Wall-clock times in the file are taken
+ * as-is (read as UTC, matching how the chart displays them) so the result does
+ * not depend on the browser's time zone. Accepts ISO-like strings
+ * ("2024-01-31 14:05:00", "2024.01.31 14:05", "20240131 14:05:00"), date-only
+ * values, and epoch seconds/milliseconds. Strings with an explicit zone
+ * ("Z", "+03:00") are honoured.
+ */
+export function parseTimestamp(date: string, time?: string): number | null {
+  const raw = (time ? `${date} ${time}` : date).trim();
+  if (/^\d{9,13}(\.\d+)?$/.test(raw)) {
+    const n = Number(raw);
+    return Math.floor(n > 1e11 ? n / 1000 : n);
   }
-
-  // 2. Compact format: YYYYMMDD with optional HH:MM:SS
-  if (/^\d{8}$/.test(trimmedDate)) {
-    const y = trimmedDate.slice(0, 4);
-    const m = trimmedDate.slice(4, 6);
-    const d = trimmedDate.slice(6, 8);
-    const timePart = trimmedTime || '00:00:00';
-    const parsed = new Date(`${y}-${m}-${d}T${timePart}Z`);
-    if (!isNaN(parsed.getTime())) return Math.floor(parsed.getTime() / 1000);
-  }
-
-  // Normalize delimiters (dots and slashes to dashes)
-  let normalizedDate = trimmedDate.replace(/[./]/g, '-');
-  const parts = normalizedDate.split('-');
-
-  if (parts.length === 3) {
-    // DD-MM-YYYY or MM-DD-YYYY where year is at end
-    if (parts[2].length === 4) {
-      normalizedDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-    } else if (parts[0].length === 4) {
-      normalizedDate = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
-    }
-  }
-
-  const timePart = trimmedTime ? (trimmedTime.length === 5 ? `${trimmedTime}:00` : trimmedTime) : '00:00:00';
-  const iso = `${normalizedDate}T${timePart}Z`;
-  const d = new Date(iso);
-  if (!isNaN(d.getTime())) {
-    return Math.floor(d.getTime() / 1000);
-  }
-
-  // Fallback to standard Date
-  const fallback = new Date(trimmedTime ? `${trimmedDate} ${trimmedTime}` : trimmedDate);
-  if (!isNaN(fallback.getTime())) {
-    return Math.floor(fallback.getTime() / 1000);
-  }
-
-  return null;
+  let s = raw
+    .replace(/^(\d{4})[./](\d{2})[./](\d{2})/, '$1-$2-$3')
+    .replace(/^(\d{4})(\d{2})(\d{2})(?=\D|$)/, '$1-$2-$3')
+    .replace(' ', 'T');
+  if (!s.includes('T')) s += 'T00:00:00';
+  if (!/(Z|[+-]\d{2}:?\d{2})$/i.test(s)) s += 'Z';
+  const ms = Date.parse(s);
+  return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
 }
 
 export function parseCSV(file: File): Promise<OHLCVBar[]> {
@@ -72,96 +41,23 @@ export function parseCSV(file: File): Promise<OHLCVBar[]> {
       complete: (results) => {
         try {
           const rows = results.data as string[][];
-          if (!rows || rows.length === 0) {
-            reject(new Error('CSV file is empty'));
-            return;
-          }
-
-          // Check if first row is a header
-          const firstRow = rows[0].map((c) => String(c).trim().toLowerCase());
-          const hasHeader = firstRow.some((c) =>
-            ['date', 'time', 'timestamp', 'open', 'high', 'low', 'close', 'vol', 'volume'].some((k) => c.includes(k))
-          );
-
-          let dateCol = -1;
-          let timeCol = -1;
-          let openCol = -1;
-          let highCol = -1;
-          let lowCol = -1;
-          let closeCol = -1;
-          let volCol = -1;
-
-          if (hasHeader) {
-            firstRow.forEach((col, idx) => {
-              if (col === 'date' || col === 'timestamp' || col === 'datetime' || col === 'time') {
-                if (dateCol === -1) dateCol = idx;
-                else if (timeCol === -1) timeCol = idx;
-              } else if (col === 'time' && dateCol !== -1) {
-                timeCol = idx;
-              } else if (col.startsWith('open') || col === 'o') {
-                openCol = idx;
-              } else if (col.startsWith('high') || col === 'h') {
-                highCol = idx;
-              } else if (col.startsWith('low') || col === 'l') {
-                lowCol = idx;
-              } else if (col.startsWith('close') || col === 'c') {
-                closeCol = idx;
-              } else if (col.startsWith('vol') || col === 'v') {
-                volCol = idx;
-              }
-            });
-          }
-
-          // Fallback column positions if header not present or incomplete
-          const startIdx = hasHeader ? 1 : 0;
-          const defaultCols = rows[startIdx] ? rows[startIdx].length : 6;
-
-          if (dateCol === -1) {
-            if (defaultCols >= 7) {
-              dateCol = 0;
-              timeCol = 1;
-              openCol = 2;
-              highCol = 3;
-              lowCol = 4;
-              closeCol = 5;
-              volCol = 6;
-            } else {
-              dateCol = 0;
-              timeCol = -1;
-              openCol = 1;
-              highCol = 2;
-              lowCol = 3;
-              closeCol = 4;
-              volCol = defaultCols >= 6 ? 5 : -1;
-            }
-          }
-
+          // Skip header row if present
+          const startIdx = isNaN(Number(rows[0]?.[rows[0].length >= 7 ? 2 : 1])) ? 1 : 0;
+          
           const bars: OHLCVBar[] = [];
 
           for (let i = startIdx; i < rows.length; i++) {
             const row = rows[i];
-            if (!row || row.length < 4) continue;
+            if (!row || row.length < 6) continue;
 
-            const dateVal = row[dateCol];
-            const timeVal = timeCol !== -1 ? row[timeCol] : undefined;
-            const timeSec = parseTimestampToSeconds(dateVal, timeVal);
-            if (timeSec === null) continue;
-
-            const o = Number(row[openCol]);
-            const h = Number(row[highCol]);
-            const l = Number(row[lowCol]);
-            const c = Number(row[closeCol]);
-            const v = volCol !== -1 ? Number(row[volCol]) || 0 : 0;
-
-            if (!isNaN(o) && !isNaN(h) && !isNaN(l) && !isNaN(c)) {
-              bars.push({
-                time: timeSec,
-                open: o,
-                high: h,
-                low: l,
-                close: c,
-                volume: v,
-              });
+            // 7+ columns: date, time, O, H, L, C, V — otherwise: timestamp, O, H, L, C, V
+            const split = row.length >= 7;
+            const time = split
+              ? parseTimestamp(String(row[0]), String(row[1]))
+              : parseTimestamp(String(row[0]));
+            const [o, h, l, c, v] = (split ? row.slice(2, 7) : row.slice(1, 6)).map(Number);
+            if (time != null && !isNaN(o) && !isNaN(h) && !isNaN(l) && !isNaN(c)) {
+              bars.push({ time, open: o, high: h, low: l, close: c, volume: v || 0 });
             }
           }
 
