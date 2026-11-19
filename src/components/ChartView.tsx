@@ -515,7 +515,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
               { style: 'bars' as ChartStyle, icon: <BarChart size={14} />, label: 'Bars' },
               { style: 'line' as ChartStyle, icon: <LineChart size={14} />, label: 'Line' },
               { style: 'area' as ChartStyle, icon: <BarChart3 size={14} />, label: 'Area' },
-            ]).map(({ style, icon, label }) => (
+            ].map(({ style, icon, label }) => (
               <button
                 key={style}
                 className={`h-8 w-8 flex items-center justify-center rounded-md border text-xs transition-all ${
