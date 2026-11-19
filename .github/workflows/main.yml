@@ -1,21 +1,24 @@
-
 name: "Desktop Release"
 
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release Tag (e.g. v0.1.0)'
+        description: "Release Tag (e.g. v0.1.0)"
         required: false
-        default: 'v0.1.0'
+        default: "v0.1.0"
         type: string
 
 permissions:
   contents: write
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -27,16 +30,20 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: '--target aarch64-apple-darwin'
+            target: aarch64-apple-darwin
+            args: "--target aarch64-apple-darwin"
 
           - platform: macos-latest
-            args: '--target x86_64-apple-darwin'
+            target: x86_64-apple-darwin
+            args: "--target x86_64-apple-darwin"
 
           - platform: ubuntu-22.04
-            args: ''
+            target: ""
+            args: ""
 
           - platform: windows-latest
-            args: ''
+            target: ""
+            args: ""
 
     runs-on: ${{ matrix.platform }}
 
@@ -51,20 +58,11 @@ jobs:
           node-version: 20
           cache: npm
 
-      # FIX: Install Bun on all platforms
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Verify Bun installation
-        run: bun --version
-
       # Rust
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.target }}
 
       # Linux dependencies
       - name: Install Linux system dependencies
@@ -97,9 +95,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
         with:
-          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          tagName: "${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}"
 
-          releaseName: 'Chart Replay Studio ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}'
+          releaseName: "Chart Replay Studio ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}"
 
           releaseBody: |
             Chart Replay Studio native desktop release.
@@ -111,4 +109,4 @@ jobs:
 
           releaseDraft: false
           prerelease: false
-          args: ${{ matrix.args }}
+          args: "${{ matrix.args }}"
