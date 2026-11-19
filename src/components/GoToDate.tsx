@@ -30,8 +30,6 @@ const SESSIONS: TradingSession[] = [
 
 const DAY = 86400;
 
-const DAY = 86400;
-
 export function GoToDate({ raw, position, tzOffset, onSeek, onSeekTime }: GoToDateProps) {
   const [showPanel, setShowPanel] = useState(false);
   const [dateStr, setDateStr] = useState('');
