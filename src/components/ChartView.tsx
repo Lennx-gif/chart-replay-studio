@@ -5,7 +5,7 @@ import {
 import { detectBaseTimeframe, type OHLCVBar } from '@/lib/csvParser';
 import type { Drawing, DrawingType } from '@/lib/drawings';
 import type { ChartStyle, SessionRecord } from '@/lib/db';
-import { calculateStats, getContractMultiplier, calculateSessionLedger, partialCloseOrder, setBreakEven } from '@/lib/tradeEngine';
+import { calculateStats, getPositionPnl, calculateSessionLedger, partialCloseOrder, setBreakEven } from '@/lib/tradeEngine';
 import {
   SPEEDS,
   buildTimeframeIndex,
@@ -179,11 +179,20 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
 
   const [name, setName] = useState(session.name);
   const [notes, setNotes] = useState(session.notes);
-  const [tzOffset, setTzOffset] = useState(() => (session.tzOffset != null && session.tzOffset !== 0 ? session.tzOffset : getNewYorkOffset()));
+  const [tzOffset, setTzOffset] = useState(() => session.tzOffset ?? getNewYorkOffset());
   const [chartStyle, setChartStyle] = useState<ChartStyle>(session.chartStyle);
   const [startingBalance, setStartingBalance] = useState(session.startingBalance);
   const [drawings, setDrawings] = useState<Drawing[]>(session.drawings);
   const [activeTool, setActiveTool] = useState<DrawingType | null>(null);
+  const changeTimezone = (offset: number) => {
+    const shift = (offset - tzOffset) * 3600;
+    setDrawings((current) => current.map((drawing) => ({
+      ...drawing,
+      points: drawing.points.map((point) => ({ ...point, time: point.time + shift })),
+    })));
+    setActiveTool(null);
+    setTzOffset(offset);
+  };
   const [favorites, setFavorites] = useState<(DrawingType | null)[]>(() => {
     try {
       const stored = localStorage.getItem('repla_tool_favorites');
@@ -238,8 +247,6 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
   }, [orders, engine]);
 
   const openOrders = orders.filter((o) => o.status === 'filled').map((o) => {
-    const mult = o.contractMultiplier ?? getContractMultiplier(o.fillPrice || currentPrice);
-    const diff = o.side === 'buy' ? currentPrice - (o.fillPrice || 0) : (o.fillPrice || 0) - currentPrice;
     return {
       id: o.id,
       side: o.side,
@@ -247,7 +254,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
       stopLoss: o.stopLoss,
       takeProfit: o.takeProfit,
       size: o.size,
-      unrealizedPnl: diff * o.size * mult,
+      unrealizedPnl: getPositionPnl(o, currentPrice, session.symbol).pnl,
     };
   });
   const pendingOrders = orders.filter((o) => o.status === 'pending');
@@ -558,7 +565,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
           <div className="w-px h-5 bg-border hidden sm:block" />
           <div className="flex items-center gap-1.5">
             <Globe size={13} className="text-muted-foreground" />
-            <TimezoneSelector offset={tzOffset} onOffsetChange={setTzOffset} />
+            <TimezoneSelector offset={tzOffset} onOffsetChange={changeTimezone} />
           </div>
 
           <div className="flex items-center gap-1">
@@ -606,6 +613,9 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
           <div ref={containerRef} className="absolute inset-0" />
           <SessionOverlay chart={chartApi} containerRef={containerRef} visibleBars={candles} showSessions={showSessions} tzOffset={tzOffset} />
           <DrawingOverlay
+            key={tzOffset}
+            symbol={session.symbol}
+            precision={precision}
             chart={chartApi}
             series={seriesApi}
             activeTool={activeTool}
@@ -629,6 +639,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
         </div>
 
         <TradePanel
+          onOffsetChange={changeTimezone}
           currentPrice={currentPrice}
           symbol={session.symbol}
           tzOffset={tzOffset}
@@ -651,7 +662,7 @@ export function ChartView({ session, rawBars, onExit }: ChartViewProps) {
           onSeekTime={engine.seekToTime}
         />
 
-        {showJournal && <TradeJournal orders={orders} onClose={() => setShowJournal(false)} startingBalance={startingBalance} />}
+        {showJournal && <TradeJournal orders={orders} onClose={() => setShowJournal(false)} startingBalance={startingBalance} tzOffset={tzOffset} onOffsetChange={changeTimezone} />}
 
         <SessionDashboardModal
           open={showDashboard}

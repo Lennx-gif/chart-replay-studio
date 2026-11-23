@@ -8,7 +8,7 @@ import {
 import { detectBaseTimeframe } from '@/lib/csvParser';
 import {
   createLimitOrder, createMarketOrder, processBar, rewindOrders, type Order, type OrderSide,
-  getContractMultiplier, getPipSize,
+  closeOrder as settleOrder,
 } from '@/lib/tradeEngine';
 
 const isActive = (o: Order) => o.status === 'pending' || o.status === 'filled';
@@ -92,7 +92,7 @@ export function useReplayEngine(raw: OHLCVBar[], session: SessionRecord) {
     if (next > cur) {
       if (curOrders.some(isActive)) {
         for (let i = cur; i < next; i++) {
-          const updated = processBar(raw[i], nextOrders);
+          const updated = processBar(raw[i], nextOrders, session.symbol);
           const changed = updated.some((o, k) => o.status !== nextOrders[k].status);
           nextOrders = updated;
           if (changed && opts.stopAtEvents && pauseOn) {
@@ -114,7 +114,7 @@ export function useReplayEngine(raw: OHLCVBar[], session: SessionRecord) {
     if (nextOrders !== curOrders) setOrders(nextOrders);
     if (events.length) announce(events);
     if (halted || next >= total) setIsPlaying(false);
-  }, [raw, total]);
+  }, [raw, total, session.symbol]);
 
   /** Step `count` units (bars, sub-bars, or candles per the step unit); negative goes back. */
   const step = useCallback((count: number) => {
@@ -122,11 +122,14 @@ export function useReplayEngine(raw: OHLCVBar[], session: SessionRecord) {
     moveTo(stepPosition(idx, p, total, unit, count, baseTimeframe), { stopAtEvents: count > 0 });
   }, [moveTo, total, baseTimeframe]);
 
-  const seek = useCallback((target: number) => moveTo(target), [moveTo]);
+  const seek = useCallback((target: number) => {
+    setIsPlaying(false);
+    moveTo(target);
+  }, [moveTo]);
 
   const seekToTime = useCallback((unixSeconds: number) => {
-    moveTo(lowerBoundByTime(raw, unixSeconds) + 1);
-  }, [moveTo, raw]);
+    seek(lowerBoundByTime(raw, unixSeconds) + 1);
+  }, [seek, raw]);
 
   const restart = useCallback(() => {
     setIsPlaying(false);
@@ -174,21 +177,10 @@ export function useReplayEngine(raw: OHLCVBar[], session: SessionRecord) {
     toast.success(`Pending ${side.toUpperCase()} limit @ ${price.toFixed(5)}`);
   }, [raw]);
 
-  const closeAtMarket = useCallback((o: Order, bar: OHLCVBar): Order => {
-    const entry = o.fillPrice ?? 0;
-    const diff = o.side === 'buy' ? bar.close - entry : entry - bar.close;
-    const mult = o.contractMultiplier ?? getContractMultiplier(entry);
-    const pip = getPipSize(entry);
-    return {
-      ...o,
-      status: 'closed',
-      closePrice: bar.close,
-      closeTime: bar.time,
-      closeReason: 'manual',
-      pnl: diff * o.size * mult,
-      pnlPips: diff / pip,
-    };
-  }, []);
+  const closeAtMarket = useCallback(
+    (order: Order, bar: OHLCVBar) => settleOrder(order, bar.close, bar.time, 'manual', session.symbol),
+    [session.symbol],
+  );
 
   const updateOrder = useCallback(
     (orderId: string, updates: { stopLoss?: number; takeProfit?: number; limitPrice?: number }) => {
@@ -256,9 +248,9 @@ export function useReplayEngine(raw: OHLCVBar[], session: SessionRecord) {
     const target = dir === 1
       ? bookmarks.find((b) => b.position > p)
       : [...bookmarks].reverse().find((b) => b.position < p);
-    if (target) moveTo(target.position);
+    if (target) seek(target.position);
     else toast.info(dir === 1 ? 'No later bookmark' : 'No earlier bookmark');
-  }, [bookmarks, moveTo]);
+  }, [bookmarks, seek]);
 
   return {
     total, position, candles, index, orders, isPlaying, speed, stepUnit, timeframe, baseTimeframe, pauseOnTradeEvents, bookmarks, startPosition,

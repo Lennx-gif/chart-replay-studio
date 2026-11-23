@@ -4,6 +4,7 @@ import {
   createLimitOrder,
   createMarketOrder,
   processBars,
+  processBar,
   rewindOrders,
   getContractMultiplier,
   getPipSize,
@@ -90,6 +91,19 @@ describe('rewindOrders', () => {
 });
 
 describe('calculateSessionLedger (Account Equity state machine)', () => {
+  it('uses the same USDJPY valuation for floating P&L, manual closes and take profit', () => {
+    const order = createMarketOrder('buy', 150, 900, 1, 149, 151);
+    const bar = { time: 1000, open: 150, high: 151, low: 150, close: 151, volume: 1 };
+    const [automatic] = processBar(bar, [order], 'USDJPY');
+    const manual = closeOrder(order, 151, bar.time, 'manual', 'USDJPY');
+    const marked = calculateSessionLedger(10000, [order], 151, 100, 'USDJPY');
+
+    expect(automatic.pnlPips).toBeCloseTo(100);
+    expect(automatic.pnl).toBeCloseTo(100000 / 151);
+    expect(manual.pnl).toBe(automatic.pnl);
+    expect(marked.unrealizedPnl).toBe(automatic.pnl);
+  });
+
   it('correctly preserves realized PnL in balance and current equity after trades close', () => {
     const closedTrade: any = {
       id: 'o1',

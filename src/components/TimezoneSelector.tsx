@@ -38,6 +38,7 @@ export function TimezoneSelector({ offset, onOffsetChange }: TimezoneSelectorPro
       onChange={(e) => onOffsetChange(Number(e.target.value))}
       className="bg-secondary text-secondary-foreground border border-border rounded px-2 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary"
       title="Display timezone"
+      aria-label="Display timezone"
     >
       {TIMEZONES.map((tz) => (
         <option key={tz.offset + tz.label} value={tz.offset}>

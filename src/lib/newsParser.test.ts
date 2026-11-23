@@ -37,4 +37,16 @@ describe('newsParser', () => {
     // Current bar is 2 hours after event -> passed
     expect(getReplayEventStatus(eventTime, eventTime + 7200)).toBe('passed');
   });
+
+  it('imports Forex Factory DateTime offsets and ignores invalid timestamps', () => {
+    const csv = `DateTime,Currency,Impact,Event,Actual,Forecast,Previous,Detail
+2007-01-01T04:30:00+03:30,CNY,High Impact Expected,Manufacturing PMI,54.8,,55.3,"Source, details"
+invalid,USD,High,Invalid event,,,,`;
+    expect(parseNewsCSV(csv)).toEqual([expect.objectContaining({
+      time: Date.UTC(2007, 0, 1, 1) / 1000,
+      currency: 'CNY',
+      impact: 'high',
+      title: 'Manufacturing PMI',
+    })]);
+  });
 });

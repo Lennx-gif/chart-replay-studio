@@ -2,14 +2,18 @@ import { useState } from 'react';
 import { X, BarChart3, List } from 'lucide-react';
 import type { Order, TradeStats } from '@/lib/tradeEngine';
 import { calculateStats } from '@/lib/tradeEngine';
+import { formatBarTime } from '@/lib/replay';
+import { TimezoneSelector } from './TimezoneSelector';
 
 interface TradeJournalProps {
   orders: Order[];
+  tzOffset?: number;
+  onOffsetChange?: (offset: number) => void;
   onClose: () => void;
   startingBalance?: number;
 }
 
-export function TradeJournal({ orders, onClose, startingBalance = 10000 }: TradeJournalProps) {
+export function TradeJournal({ orders, onClose, startingBalance = 10000, tzOffset = 0, onOffsetChange }: TradeJournalProps) {
   const [tab, setTab] = useState<'stats' | 'log'>('stats');
   const closed = orders.filter(o => o.status === 'closed');
   const stats = calculateStats(orders, startingBalance);
@@ -37,15 +41,18 @@ export function TradeJournal({ orders, onClose, startingBalance = 10000 }: Trade
             </button>
           </div>
         </div>
-        <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
-          <X size={16} />
-        </button>
+        <div className="flex items-center gap-3">
+          {onOffsetChange && <TimezoneSelector offset={tzOffset} onOffsetChange={onOffsetChange} />}
+          <button onClick={onClose} aria-label="Close trade journal" className="text-muted-foreground hover:text-foreground transition-colors">
+            <X size={16} />
+          </button>
+        </div>
       </div>
 
       {tab === 'stats' ? (
         <StatsView stats={stats} />
       ) : (
-        <TradeLog trades={closed} />
+        <TradeLog trades={closed} tzOffset={tzOffset} />
       )}
     </div>
   );
@@ -170,7 +177,7 @@ function EquityCurveChart({ data }: { data: { time: number; equity: number }[] }
   );
 }
 
-function TradeLog({ trades }: { trades: Order[] }) {
+function TradeLog({ trades, tzOffset }: { trades: Order[]; tzOffset: number }) {
   const sorted = [...trades].sort((a, b) => (b.closeTime || 0) - (a.closeTime || 0));
 
   return (
@@ -215,7 +222,7 @@ function TradeLog({ trades }: { trades: Order[] }) {
                 {(trade.pnl || 0) >= 0 ? '+' : ''}{(trade.pnl || 0).toFixed(2)}
               </td>
               <td className="px-3 py-2 text-right text-muted-foreground">
-                {trade.closeTime ? new Date(trade.closeTime * 1000).toLocaleString() : '-'}
+                {trade.closeTime ? formatBarTime(trade.closeTime, tzOffset) : '-'}
               </td>
             </tr>
           ))}

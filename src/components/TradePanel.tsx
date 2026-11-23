@@ -20,11 +20,13 @@ import { getInstrumentSpec, LOT_PRESETS, PIP_PRESETS } from '@/lib/currency';
 import { calculateRiskPositionSize } from '@/lib/tradeEngine';
 import { NewsFeed } from './NewsFeed';
 import { SessionAnalytics } from './SessionAnalytics';
+import { TimezoneSelector } from './TimezoneSelector';
 
 interface TradePanelProps {
   currentPrice: number;
   symbol?: string;
   tzOffset?: number;
+  onOffsetChange?: (offset: number) => void;
   onPlaceOrder: (side: OrderSide, size: number, sl?: number, tp?: number) => void;
   onPlacePending?: (side: OrderSide, price: number, sl?: number, tp?: number, size?: number) => void;
   onCloseOrder: (orderId: string) => void;
@@ -70,6 +72,7 @@ export function TradePanel({
   currentPrice,
   symbol = 'EURUSD',
   tzOffset = 0,
+  onOffsetChange,
   onPlaceOrder,
   onPlacePending,
   onCloseOrder,
@@ -159,9 +162,10 @@ export function TradePanel({
       totalEquity,
       { mode: riskMode, value: riskValue },
       slPips,
-      currentPrice
+      currentPrice,
+      symbol
     );
-  }, [totalEquity, riskMode, riskValue, slPips, currentPrice]);
+  }, [totalEquity, riskMode, riskValue, slPips, currentPrice, symbol]);
 
   const handleApplyCalculatedSize = () => {
     setSize(calculatedRisk.size);
@@ -787,6 +791,7 @@ export function TradePanel({
       {/* Tab 3: Historical Economic News Feed */}
       {activeTab === 'news' && (
         <NewsFeed
+          tzOffset={tzOffset}
           currentReplayTime={currentReplayTime}
           symbol={symbol}
           onJumpToTime={onSeekTime}
@@ -796,6 +801,11 @@ export function TradePanel({
       {/* Tab 4: Dedicated Per-Session Analytics */}
       {activeTab === 'analytics' && (
         <div className="flex-1 overflow-y-auto">
+          {onOffsetChange && (
+            <div className="flex justify-end border-b border-border px-3 py-2">
+              <TimezoneSelector offset={tzOffset} onOffsetChange={onOffsetChange} />
+            </div>
+          )}
           <SessionAnalytics
             orders={orders}
             startingBalance={startingBalance}
