@@ -10,8 +10,8 @@ export function normalizeImpact(raw: string): NewsImpact {
 
 /**
  * Parse economic calendar CSV text (ForexFactory format or generic CSV).
- * Expected headers or columns:
- * Date, Time, Currency, Impact, Event, Actual, Forecast, Previous
+ * Accepts a Forex Factory DateTime column or separate Date and Time columns.
+ * Explicit offsets are honored. Timestamps without an offset are treated as UTC.
  */
 export function parseNewsCSV(csvContent: string): NewsEventRecord[] {
   const result = Papa.parse<Record<string, string>>(csvContent, {
@@ -19,9 +19,29 @@ export function parseNewsCSV(csvContent: string): NewsEventRecord[] {
     skipEmptyLines: true,
   });
 
+  return parseNewsRows(result.data).sort((a, b) => a.time - b.time);
+}
+
+export function parseNewsFile(file: File): Promise<NewsEventRecord[]> {
+  return new Promise((resolve, reject) => {
+    const records: NewsEventRecord[] = [];
+    Papa.parse<Record<string, string>>(file, {
+      header: true,
+      skipEmptyLines: true,
+      chunkSize: 1024 * 1024,
+      chunk: ({ data }) => {
+        for (const record of parseNewsRows(data)) records.push(record);
+      },
+      complete: () => resolve(records.sort((a, b) => a.time - b.time)),
+      error: reject,
+    });
+  });
+}
+
+function parseNewsRows(rows: Record<string, string>[]): NewsEventRecord[] {
   const records: NewsEventRecord[] = [];
 
-  for (const row of result.data) {
+  for (const row of rows) {
     // Find keys case-insensitively
     const getCol = (...names: string[]) => {
       for (const name of names) {
@@ -41,22 +61,16 @@ export function parseNewsCSV(csvContent: string): NewsEventRecord[] {
     const forecast = getCol('forecast', 'f/c', 'fcst', 'consensus') || undefined;
     const previous = getCol('previous', 'prev') || undefined;
 
-    if (!title || (!dateStr && !timeStr)) continue;
-
-    // Parse date & time into unix seconds UTC
-    let time = 0;
-    try {
-      const combined = `${dateStr} ${timeStr}`.trim();
-      const parsed = Date.parse(combined);
-      if (!isNaN(parsed)) {
-        time = Math.floor(parsed / 1000);
-      } else {
-        const dOnly = Date.parse(dateStr);
-        if (!isNaN(dOnly)) time = Math.floor(dOnly / 1000);
-      }
-    } catch {
-      continue;
-    }
+    const dateTime = getCol('datetime', 'date time', 'timestamp');
+    const combined = dateTime || [dateStr, timeStr].filter(Boolean).join(' ');
+    if (!dateTime && !dateStr) continue;
+    const explicitZone = /(?:Z|GMT|UTC|[+-]\d{2}:?\d{2})$/i.test(combined);
+    const timestamp = explicitZone
+      ? combined
+      : combined.includes('T') && /^\d{4}-\d{2}-\d{2}T/.test(combined)
+        ? `${combined}Z`
+        : `${combined} UTC`;
+    const time = Math.floor(Date.parse(timestamp) / 1000);
 
     if (time > 0) {
       records.push({
@@ -72,7 +86,7 @@ export function parseNewsCSV(csvContent: string): NewsEventRecord[] {
     }
   }
 
-  return records.sort((a, b) => a.time - b.time);
+  return records;
 }
 
 export type ReplayEventStatus = 'upcoming' | 'active' | 'passed';

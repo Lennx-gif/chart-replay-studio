@@ -98,12 +98,13 @@ export function calculateRiskPositionSize(
   balance: number,
   riskInput: { mode: 'percent' | 'cash'; value: number },
   slPips: number,
-  currentPrice: number
+  currentPrice: number,
+  symbol?: string
 ): RiskCalculation {
   const safePrice = Math.max(0.0001, currentPrice);
-  const mult = getContractMultiplier(safePrice);
-  const pip = getPipSize(safePrice);
-  const pipValuePerLot = pip * mult; // e.g. 0.0001 * 100000 = $10/pip
+  const pipValuePerLot = symbol
+    ? getInstrumentSpec(symbol, safePrice).getPipValuePerLot(safePrice)
+    : getPipSize(safePrice) * getContractMultiplier(safePrice);
 
   const riskAmount =
     riskInput.mode === 'percent'
@@ -176,7 +177,7 @@ export function createLimitOrder(
 /**
  * Process a bar against open orders to check for fills, SL, TP hits
  */
-export function processBar(bar: OHLCVBar, orders: Order[]): Order[] {
+export function processBar(bar: OHLCVBar, orders: Order[], symbol?: string): Order[] {
   return orders.map((order) => {
     // Fill pending limit orders
     if (order.status === 'pending' && order.type === 'limit' && order.limitPrice != null) {
@@ -203,70 +204,22 @@ export function processBar(bar: OHLCVBar, orders: Order[]): Order[] {
 
     // Check SL/TP on filled orders
     if (order.status === 'filled' && order.fillPrice != null) {
-      const entry = order.fillPrice;
-      const mult = order.contractMultiplier ?? getContractMultiplier(entry);
-      const pip = getPipSize(entry);
-
       if (order.side === 'buy') {
         // Check SL first (worst case)
         if (order.stopLoss != null && bar.low <= order.stopLoss) {
-          const diff = order.stopLoss - entry;
-          const pnl = diff * order.size * mult;
-          const pnlPips = diff / pip;
-          return {
-            ...order,
-            status: 'closed' as OrderStatus,
-            closePrice: order.stopLoss,
-            closeTime: bar.time,
-            closeReason: 'sl' as const,
-            pnl,
-            pnlPips,
-          };
+          return closeOrder(order, order.stopLoss, bar.time, 'sl', symbol);
         }
         // Check TP
         if (order.takeProfit != null && bar.high >= order.takeProfit) {
-          const diff = order.takeProfit - entry;
-          const pnl = diff * order.size * mult;
-          const pnlPips = diff / pip;
-          return {
-            ...order,
-            status: 'closed' as OrderStatus,
-            closePrice: order.takeProfit,
-            closeTime: bar.time,
-            closeReason: 'tp' as const,
-            pnl,
-            pnlPips,
-          };
+          return closeOrder(order, order.takeProfit, bar.time, 'tp', symbol);
         }
       } else {
         // Sell order
         if (order.stopLoss != null && bar.high >= order.stopLoss) {
-          const diff = entry - order.stopLoss;
-          const pnl = diff * order.size * mult;
-          const pnlPips = diff / pip;
-          return {
-            ...order,
-            status: 'closed' as OrderStatus,
-            closePrice: order.stopLoss,
-            closeTime: bar.time,
-            closeReason: 'sl' as const,
-            pnl,
-            pnlPips,
-          };
+          return closeOrder(order, order.stopLoss, bar.time, 'sl', symbol);
         }
         if (order.takeProfit != null && bar.low <= order.takeProfit) {
-          const diff = entry - order.takeProfit;
-          const pnl = diff * order.size * mult;
-          const pnlPips = diff / pip;
-          return {
-            ...order,
-            status: 'closed' as OrderStatus,
-            closePrice: order.takeProfit,
-            closeTime: bar.time,
-            closeReason: 'tp' as const,
-            pnl,
-            pnlPips,
-          };
+          return closeOrder(order, order.takeProfit, bar.time, 'tp', symbol);
         }
       }
     }
@@ -286,19 +239,27 @@ export function processBars(bars: OHLCVBar[], orders: Order[]): Order[] {
   return result;
 }
 
+export function getPositionPnl(order: Order, price: number, symbol?: string) {
+  if (order.fillPrice == null) return { pnl: 0, pnlPips: 0 };
+  const entry = order.fillPrice;
+  const diff = order.side === 'buy' ? price - entry : entry - price;
+  const spec = symbol ? getInstrumentSpec(symbol, price) : null;
+  const pipSize = spec?.pipSize ?? getPipSize(entry);
+  const pipValue = spec?.getPipValuePerLot(price)
+    ?? pipSize * (order.contractMultiplier ?? getContractMultiplier(entry));
+  const pnlPips = diff / pipSize;
+  return { pnlPips, pnl: pnlPips * pipValue * order.size };
+}
+
 export function closeOrder(
   order: Order,
   currentPrice: number,
   currentTime: number,
-  reason: 'manual' | 'sl' | 'tp' = 'manual'
+  reason: 'manual' | 'sl' | 'tp' = 'manual',
+  symbol?: string
 ): Order {
   if (order.status !== 'filled' || order.fillPrice == null) return order;
-  const entry = order.fillPrice;
-  const mult = order.contractMultiplier ?? getContractMultiplier(entry);
-  const pip = getPipSize(entry);
-  const diff = order.side === 'buy' ? currentPrice - entry : entry - currentPrice;
-  const pnl = diff * order.size * mult;
-  const pnlPips = diff / pip;
+  const { pnl, pnlPips } = getPositionPnl(order, currentPrice, symbol);
   return {
     ...order,
     status: 'closed',
@@ -420,7 +381,6 @@ export function calculateSessionLedger(
   symbol: string = 'EURUSD'
 ): SessionLedger {
   const spec = getInstrumentSpec(symbol, currentPrice);
-  const pipValue = spec.getPipValuePerLot(currentPrice);
 
   let realizedPnl = 0;
   let closedCount = 0;
@@ -435,11 +395,7 @@ export function calculateSessionLedger(
       closedCount++;
       if (o.pnl > 0) winsCount++;
     } else if (o.status === 'filled' && o.fillPrice != null) {
-      const entry = o.fillPrice;
-      const diff = o.side === 'buy' ? currentPrice - entry : entry - currentPrice;
-      const diffPips = diff / spec.pipSize;
-      const pnl = diffPips * (pipValue * o.size);
-      unrealizedPnl += pnl;
+      unrealizedPnl += getPositionPnl(o, currentPrice, symbol).pnl;
 
       const positionNotional = o.size * spec.contractSize * (spec.quoteCurrency === 'USD' ? currentPrice : 1);
       usedMargin += positionNotional / Math.max(1, leverage);
@@ -479,11 +435,6 @@ export function partialCloseOrder(
   if (order.status !== 'filled' || order.fillPrice == null || closeRatio <= 0 || closeRatio >= 1) {
     return null;
   }
-  const spec = getInstrumentSpec(symbol, currentPrice);
-  const pipValue = spec.getPipValuePerLot(currentPrice);
-  const entry = order.fillPrice;
-  const diff = order.side === 'buy' ? currentPrice - entry : entry - currentPrice;
-  const pnlPips = diff / spec.pipSize;
 
   const closedSize = Math.max(0.01, Math.round(order.size * closeRatio * 100) / 100);
   const remainingSize = Math.max(0.01, Math.round((order.size - closedSize) * 100) / 100);
@@ -496,8 +447,7 @@ export function partialCloseOrder(
     closePrice: currentPrice,
     closeTime: currentTime,
     closeReason: 'manual',
-    pnl: pnlPips * (pipValue * closedSize),
-    pnlPips,
+    ...getPositionPnl({ ...order, size: closedSize }, currentPrice, symbol),
   };
 
   const remainingOrder: Order = {

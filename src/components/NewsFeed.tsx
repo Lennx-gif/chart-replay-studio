@@ -16,34 +16,38 @@ import {
 import { toast } from 'sonner';
 import type { NewsEventRecord, NewsImpact } from '@/lib/db';
 import { listNewsEvents, saveNewsEvents, clearNewsEvents } from '@/lib/store';
-import { parseNewsCSV, getReplayEventStatus } from '@/lib/newsParser';
+import { parseNewsFile, getReplayEventStatus } from '@/lib/newsParser';
 import { SAMPLE_NEWS_EVENTS } from '@/lib/sampleNews';
-import { WaybackCalendar, type WaybackDayIndicator, formatYmd } from './WaybackCalendar';
-import { isDesktopApp, pickCsvFile } from '@/services/nativeDialogs';
+import { WaybackCalendar, type WaybackDayIndicator } from './WaybackCalendar';
+import { formatBarTime } from '@/lib/replay';
 
 interface NewsFeedProps {
   currentReplayTime?: number;
+  tzOffset?: number;
   symbol?: string;
   onJumpToTime?: (unixSec: number) => void;
 }
 
-const CURRENCIES = ['ALL', 'AUTO', 'USD', 'EUR', 'GBP', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD'];
+const EVENTS_PER_PAGE = 100;
 
-export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTime }: NewsFeedProps) {
+export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', tzOffset = 0, onJumpToTime }: NewsFeedProps) {
   const [events, setEvents] = useState<NewsEventRecord[]>([]);
   const [selectedCurrency, setSelectedCurrency] = useState<string>('AUTO');
   const [selectedImpact, setSelectedImpact] = useState<NewsImpact | 'ALL'>('ALL');
   const [loading, setLoading] = useState(true);
+  const [importing, setImporting] = useState(false);
   const [showCalendar, setShowCalendar] = useState<boolean>(true);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [dateScope, setDateScope] = useState<'day' | 'week' | 'all'>('day');
+  const [page, setPage] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const offsetSeconds = tzOffset * 3600;
 
   // Derive current replay date string (YYYY-MM-DD)
   const currentReplayYmd = useMemo(() => {
     if (!currentReplayTime || currentReplayTime <= 0) return null;
-    return new Date(currentReplayTime * 1000).toISOString().slice(0, 10);
-  }, [currentReplayTime]);
+    return formatBarTime(currentReplayTime, tzOffset).slice(0, 10);
+  }, [currentReplayTime, tzOffset]);
 
   // Initial selected date follows replay candle if not set
   useEffect(() => {
@@ -69,18 +73,23 @@ export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTim
   }, []);
 
   const handleFileUpload = async (file: File) => {
+    setImporting(true);
     try {
-      const text = await file.text();
-      const parsed = parseNewsCSV(text);
+      const parsed = await parseNewsFile(file);
       if (parsed.length === 0) {
         toast.error('No valid economic calendar events detected in file');
         return;
       }
       await saveNewsEvents(parsed);
+      setSelectedCurrency('ALL');
+      setSelectedImpact('ALL');
+      setDateScope('all');
       toast.success(`Imported ${parsed.length} economic events`);
       await loadEvents();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to import news CSV');
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -108,7 +117,7 @@ export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTim
     for (const e of events) {
       // Currency filter
       if (selectedCurrency !== 'ALL') {
-        if (!targetCurrencies.includes(e.currency.toUpperCase())) {
+        if (e.currency !== 'ALL' && !targetCurrencies.includes(e.currency.toUpperCase())) {
           continue;
         }
       }
@@ -117,7 +126,7 @@ export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTim
         continue;
       }
 
-      const dateStr = new Date(e.time * 1000).toISOString().slice(0, 10);
+      const dateStr = formatBarTime(e.time, tzOffset).slice(0, 10);
       if (!map[dateStr]) {
         map[dateStr] = { newsImpacts: { high: 0, medium: 0, low: 0 } };
       }
@@ -128,14 +137,14 @@ export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTim
     }
 
     return map;
-  }, [events, selectedCurrency, targetCurrencies, selectedImpact]);
+  }, [events, selectedCurrency, targetCurrencies, selectedImpact, tzOffset]);
 
   // 2. Filter events by currency, impact, AND selected date/scope
   const filteredEvents = useMemo(() => {
     return events.filter((e) => {
       // Currency filter
       if (selectedCurrency !== 'ALL') {
-        if (!targetCurrencies.includes(e.currency.toUpperCase())) {
+        if (e.currency !== 'ALL' && !targetCurrencies.includes(e.currency.toUpperCase())) {
           return false;
         }
       }
@@ -146,7 +155,7 @@ export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTim
 
       // Date filtering
       if (dateScope !== 'all' && selectedDate) {
-        const eYmd = new Date(e.time * 1000).toISOString().slice(0, 10);
+        const eYmd = formatBarTime(e.time, tzOffset).slice(0, 10);
         if (dateScope === 'day') {
           if (eYmd !== selectedDate) return false;
         } else if (dateScope === 'week') {
@@ -156,30 +165,30 @@ export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTim
           const selDayOfWeek = (new Date(selUtc * 1000).getUTCDay() + 6) % 7; // Mon = 0
           const weekStart = selUtc - selDayOfWeek * 86400;
           const weekEnd = weekStart + 7 * 86400;
-          if (e.time < weekStart || e.time >= weekEnd) return false;
+          const shiftedTime = e.time + offsetSeconds;
+          if (shiftedTime < weekStart || shiftedTime >= weekEnd) return false;
         }
       }
 
       return true;
     });
-  }, [events, selectedCurrency, targetCurrencies, selectedImpact, selectedDate, dateScope]);
+  }, [events, selectedCurrency, targetCurrencies, selectedImpact, selectedDate, dateScope, tzOffset, offsetSeconds]);
 
-  const fmtEventTime = (unix: number) => {
-    return new Date(unix * 1000).toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    });
-  };
+  useEffect(() => setPage(0), [filteredEvents]);
+  const pageCount = Math.ceil(filteredEvents.length / EVENTS_PER_PAGE);
+  const currentPage = Math.max(0, Math.min(page, pageCount - 1));
+  const visibleEvents = filteredEvents.slice(currentPage * EVENTS_PER_PAGE, (currentPage + 1) * EVENTS_PER_PAGE);
+  const currencies = useMemo(
+    () => ['ALL', 'AUTO', ...Array.from(new Set(events.map((event) => event.currency))).filter((currency) => currency !== 'ALL').sort()],
+    [events],
+  );
 
   // Jump chart to the start of the currently selected calendar date
   const handleJumpToSelectedDay = () => {
     if (!selectedDate || !onJumpToTime) return;
     const [y, m, d] = selectedDate.split('-').map(Number);
     const dayStartUnix = Date.UTC(y, m - 1, d) / 1000;
-    onJumpToTime(dayStartUnix);
+    onJumpToTime(dayStartUnix - offsetSeconds);
   };
 
   const handleSyncToChart = () => {
@@ -190,17 +199,6 @@ export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTim
   };
 
   const isSyncedToReplay = selectedDate === currentReplayYmd;
-
-  const handleUploadClick = async () => {
-    if (isDesktopApp()) {
-      const file = await pickCsvFile();
-      if (file) {
-        await handleFileUpload(file);
-      }
-    } else {
-      fileInputRef.current?.click();
-    }
-  };
 
   return (
     <div className="flex flex-col h-full overflow-hidden select-none text-xs">
@@ -225,14 +223,17 @@ export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTim
               {showCalendar ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
             </button>
             <button
-              onClick={handleUploadClick}
+              onClick={() => fileInputRef.current?.click()}
+              disabled={importing || loading}
               className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
               title="Import CSV Calendar"
+              aria-label="Import CSV calendar"
             >
               <Upload size={12} />
             </button>
             <button
               onClick={handleResetToSample}
+              disabled={importing || loading}
               className="p-1 rounded text-muted-foreground hover:text-primary hover:bg-secondary transition-colors"
               title="Reset to bundled sample calendar"
             >
@@ -259,7 +260,7 @@ export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTim
             onChange={(e) => setSelectedCurrency(e.target.value)}
             className="bg-card text-foreground border border-border rounded px-2 py-1 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
           >
-            {CURRENCIES.map((c) => (
+            {currencies.map((c) => (
               <option key={c} value={c}>
                 {c === 'AUTO' ? `Pair (${targetCurrencies.join('/')})` : c}
               </option>
@@ -283,6 +284,7 @@ export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTim
       {showCalendar && (
         <div className="p-2 border-b border-border bg-card/60 shrink-0">
           <WaybackCalendar
+            tzOffset={tzOffset}
             mode="compact"
             currentReplayTime={currentReplayTime}
             selectedDate={selectedDate ?? undefined}
@@ -300,7 +302,7 @@ export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTim
         <div className="flex items-center gap-1.5 truncate">
           <Clock size={11} className="text-primary shrink-0" />
           <span className="font-bold text-foreground truncate">
-            {selectedDate ? selectedDate : 'All Events'}
+            {dateScope === 'all' || !selectedDate ? 'All Events' : selectedDate}
           </span>
           <span className="text-muted-foreground">({filteredEvents.length})</span>
         </div>
@@ -360,8 +362,17 @@ export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTim
       </div>
 
       {/* 4. Events Feed List */}
-      <div className="flex-1 overflow-y-auto divide-y divide-border">
-        {loading ? (
+      {pageCount > 1 && (
+        <div className="flex items-center justify-between border-b border-border px-2 py-1">
+          <button className="toolbar-btn" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button>
+          <span className="text-muted-foreground">{currentPage + 1} / {pageCount}</span>
+          <button className="toolbar-btn" disabled={currentPage + 1 >= pageCount} onClick={() => setPage(currentPage + 1)}>Next</button>
+        </div>
+      )}
+      <div key={currentPage} className="flex-1 overflow-y-auto divide-y divide-border">
+        {importing ? (
+          <div role="status" className="p-6 text-center text-muted-foreground">Importing calendar…</div>
+        ) : loading ? (
           <div className="p-6 text-center text-muted-foreground">Loading calendar...</div>
         ) : filteredEvents.length === 0 ? (
           <div className="p-6 text-center text-muted-foreground space-y-1.5">
@@ -380,7 +391,7 @@ export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTim
             )}
           </div>
         ) : (
-          filteredEvents.map((event) => {
+          visibleEvents.map((event) => {
             const status = currentReplayTime > 0 ? getReplayEventStatus(event.time, currentReplayTime) : 'passed';
             const isHigh = event.impact === 'high';
             const isMed = event.impact === 'medium';
@@ -411,7 +422,7 @@ export function NewsFeed({ currentReplayTime = 0, symbol = 'EURUSD', onJumpToTim
                       {event.currency}
                     </span>
                     <span className="text-[10px] font-mono text-muted-foreground">
-                      {fmtEventTime(event.time)}
+                      {formatBarTime(event.time, tzOffset)}
                     </span>
                   </div>
 

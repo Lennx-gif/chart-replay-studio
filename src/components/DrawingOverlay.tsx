@@ -2,7 +2,8 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import type { Drawing, DrawingType, DrawingPoint, LineStyle } from '@/lib/drawings';
 import { createDrawingId, DEFAULT_COLORS, DEFAULT_FIB_LEVELS, DEFAULT_FIB_EXT_LEVELS, getClicksNeeded } from '@/lib/drawings';
-import type { Order } from '@/lib/tradeEngine';
+import { getPositionPnl, type Order } from '@/lib/tradeEngine';
+import { priceDiffToPips } from '@/lib/currency';
 import { DrawingFloatingToolbar } from './DrawingFloatingToolbar';
 
 import type { OHLCVBar } from '@/lib/csvParser';
@@ -11,6 +12,8 @@ interface DrawingOverlayProps {
   chart: IChartApi | null;
   series: ISeriesApi<'Candlestick'> | null;
   activeTool: DrawingType | null;
+  symbol: string;
+  precision: number;
   onToolChange?: (tool: DrawingType | null) => void;
   drawings: Drawing[];
   onDrawingsChange: (drawings: Drawing[]) => void;
@@ -63,6 +66,8 @@ export function DrawingOverlay({
   chart,
   series,
   activeTool,
+  symbol,
+  precision,
   onToolChange,
   drawings,
   onDrawingsChange,
@@ -213,9 +218,8 @@ export function DrawingOverlay({
   }, [chart, series, containerRef, getSafeTimeScale, getSafeSeries]);
 
   const snapPrice = useCallback((price: number) => {
-    if (price > 10) return Math.round(price * 100) / 100;
-    return Math.round(price * 10000) / 10000;
-  }, []);
+    return Number(price.toFixed(precision));
+  }, [precision]);
 
   const hitTestDrawing = useCallback((mx: number, my: number): Drawing | null => {
     if (!chart || !series || lockAllDrawings || hideAllDrawings) return null;
@@ -477,6 +481,7 @@ export function DrawingOverlay({
         text: activeTool === 'text' ? 'Note' : undefined,
         showLabel: true,
       };
+      undoStackRef.current.push(drawings);
       onDrawingsChange([...drawings, drawing]);
       setSelectedDrawingId(drawing.id);
       onToolChange?.(null);
@@ -541,6 +546,7 @@ export function DrawingOverlay({
           };
         }
         if (createdDrawing) {
+          undoStackRef.current.push(drawings);
           onDrawingsChange([...drawings, createdDrawing]);
           setSelectedDrawingId(createdDrawing.id);
           onToolChange?.(null);
@@ -596,6 +602,7 @@ export function DrawingOverlay({
           fillOpacity: activeTool === 'ellipse' ? 0.1 : undefined,
           showLabel: true,
         };
+        undoStackRef.current.push(drawings);
         onDrawingsChange([...drawings, drawing]);
         setSelectedDrawingId(drawing.id);
         onToolChange?.(null);
@@ -1064,6 +1071,16 @@ export function DrawingOverlay({
       if (e.key === 'Escape') {
         if (activeTool) onToolChange?.(null);
         pendingPointsRef.current = [];
+        isBrushing.current = false;
+        brushPointsRef.current = [];
+        previewDrawingRef.current = null;
+        if (isDraggingRef.current) {
+          isDraggingRef.current = false;
+          chart?.applyOptions({ handleScroll: true, handleScale: true });
+        }
+        setOrderDragState(null);
+        setDragState(null);
+        renderFnRef.current?.();
         setSelectedDrawingId(null);
         setContextMenu(null);
       }
@@ -1082,19 +1099,18 @@ export function DrawingOverlay({
           onDrawingsChange(prev);
           setSelectedDrawingId(null);
           setToolbarPos(null);
-        } else if (drawings.length > 0) {
-          onDrawingsChange(drawings.slice(0, -1));
-          setSelectedDrawingId(null);
-          setToolbarPos(null);
         }
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [selectedDrawingId, drawings, onDrawingsChange, activeTool, onToolChange]);
+  }, [selectedDrawingId, drawings, onDrawingsChange, activeTool, onToolChange, chart]);
 
   useEffect(() => {
     pendingPointsRef.current = [];
+    isBrushing.current = false;
+    brushPointsRef.current = [];
+    renderFnRef.current?.();
   }, [activeTool]);
 
   useEffect(() => {
@@ -1315,10 +1331,8 @@ export function DrawingOverlay({
               ctx.fillText(`SL ${activeSL.toFixed(activeSL > 10 ? 2 : 4)} ↕`, badgeX + badgeW / 2, slY);
 
               // Projected loss / pips tag
-              const diff = o.side === 'buy' ? activeSL - entry : entry - activeSL;
-              const pips = diff * (entry > 10 ? 100 : 10000);
-              const estLoss = diff * o.size * (entry > 10 ? 1 : 100000);
-              const infoText = `${pips.toFixed(0)}p ($${estLoss.toFixed(2)})`;
+              const { pnl, pnlPips } = getPositionPnl({ ...o, fillPrice: entry }, activeSL, symbol);
+              const infoText = `${pnlPips.toFixed(1)}p (${pnl < 0 ? '-' : '+'}$${Math.abs(pnl).toFixed(2)})`;
 
               if (isDraggingSL) {
                 ctx.setLineDash([4, 4]);
@@ -1359,10 +1373,8 @@ export function DrawingOverlay({
               ctx.fillText(`TP ${activeTP.toFixed(activeTP > 10 ? 2 : 4)} ↕`, badgeX + badgeW / 2, tpY);
 
               // Projected profit / pips tag
-              const diff = o.side === 'buy' ? activeTP - entry : entry - activeTP;
-              const pips = diff * (entry > 10 ? 100 : 10000);
-              const estGain = diff * o.size * (entry > 10 ? 1 : 100000);
-              const infoText = `+${pips.toFixed(0)}p (+$${estGain.toFixed(2)})`;
+              const { pnl, pnlPips } = getPositionPnl({ ...o, fillPrice: entry }, activeTP, symbol);
+              const infoText = `${pnlPips.toFixed(1)}p (${pnl < 0 ? '-' : '+'}$${Math.abs(pnl).toFixed(2)})`;
 
               if (isDraggingTP) {
                 ctx.setLineDash([4, 4]);
@@ -1417,7 +1429,7 @@ export function DrawingOverlay({
       ro.disconnect();
       window.removeEventListener('resize', handleWindowResize);
     };
-  }, [chart, series, drawings, activeTool, containerRef, selectedDrawingId, hoveredDrawingId, snapPrice, orders, orderDragState]);
+  }, [chart, series, drawings, activeTool, containerRef, selectedDrawingId, hoveredDrawingId, snapPrice, orders, orderDragState, symbol, precision]);
 
   // --- Render helpers ---
 
@@ -1869,9 +1881,9 @@ export function DrawingOverlay({
     const reward = Math.abs(tpPrice - entryPrice);
     ctx.font = '9px JetBrains Mono, monospace';
     ctx.fillStyle = NUBIAN_LONG + '80';
-    ctx.fillText(`+${(reward * 10000).toFixed(0)}p`, x1 + boxWidth + 4, (entryY + tpY) / 2 + 3);
+    ctx.fillText(`+${priceDiffToPips(reward, symbol, entryPrice).toFixed(1)}p`, x1 + boxWidth + 4, (entryY + tpY) / 2 + 3);
     ctx.fillStyle = NUBIAN_SHORT + '80';
-    ctx.fillText(`-${(risk * 10000).toFixed(0)}p`, x1 + boxWidth + 4, (entryY + slY) / 2 + 3);
+    ctx.fillText(`-${priceDiffToPips(risk, symbol, entryPrice).toFixed(1)}p`, x1 + boxWidth + 4, (entryY + slY) / 2 + 3);
 
     // Draggable Level Grab Handles
     const drawLevelHandle = (px: number, py: number, color: string, label: string, isDraggingThis: boolean) => {
@@ -2164,10 +2176,12 @@ export function DrawingOverlay({
   }
 
   const handleUpdateDrawing = useCallback((updated: Drawing) => {
+    undoStackRef.current.push(drawings);
     onDrawingsChange(drawings.map(d => d.id === updated.id ? updated : d));
   }, [drawings, onDrawingsChange]);
 
   const handleDeleteDrawing = useCallback((id: string) => {
+    undoStackRef.current.push(drawings);
     onDrawingsChange(drawings.filter(d => d.id !== id));
     setSelectedDrawingId(null);
     setToolbarPos(null);
@@ -2185,6 +2199,7 @@ export function DrawingOverlay({
     if (clone.entryPrice) clone.entryPrice = clone.entryPrice + 0.0005;
     if (clone.stopLoss) clone.stopLoss = clone.stopLoss + 0.0005;
     if (clone.takeProfit) clone.takeProfit = clone.takeProfit + 0.0005;
+    undoStackRef.current.push(drawings);
     onDrawingsChange([...drawings, clone]);
     setSelectedDrawingId(clone.id);
     setContextMenu(null);
@@ -2270,6 +2285,7 @@ export function DrawingOverlay({
                 <button
                   className="w-full text-left px-3 py-1.5 text-xs hover:bg-destructive/10 text-destructive/60 flex items-center gap-2 transition-colors"
                   onClick={() => {
+                    undoStackRef.current.push(drawings);
                     onDrawingsChange(drawings.filter(dd => dd.type !== d.type));
                     setContextMenu(null);
                     setSelectedDrawingId(null);
